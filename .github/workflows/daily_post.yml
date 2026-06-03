@@ -1,0 +1,62 @@
+name: LinkedIn Daily Content Automation
+
+on:
+  schedule:
+    # 8:00 AM IST = 2:30 AM UTC
+    - cron: '30 2 * * 1-5'   # Monday to Friday only
+  workflow_dispatch:           # Allow manual trigger from GitHub UI
+    inputs:
+      dry_run:
+        description: 'Run in dry-run mode (no external writes)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      story_count:
+        description: 'Number of top stories to generate (1-10)'
+        required: false
+        default: '5'
+
+jobs:
+  run-agent:
+    name: Run LinkedIn Content Pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run LinkedIn Automation Agent
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_SHEETS_CREDS: ${{ secrets.GOOGLE_SHEETS_CREDS }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_SHEET_TAB: ${{ secrets.GOOGLE_SHEET_TAB || 'PostQueue' }}
+          MAKE_WEBHOOK_URL: ${{ secrets.MAKE_WEBHOOK_URL }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          TOP_STORIES_COUNT: ${{ github.event.inputs.story_count || '5' }}
+        run: |
+          python main.py \
+            ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }} \
+            --story-count ${{ github.event.inputs.story_count || '5' }}
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-logs-${{ github.run_id }}
+          path: |
+            *.log
+          retention-days: 7
