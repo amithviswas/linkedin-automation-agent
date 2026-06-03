@@ -86,7 +86,9 @@ def run(
         log_warning(f"Only {len(news_items)} items found — using all without filtering")
         return _mock_filter(news_items, len(news_items))
 
-    prompt = _load_prompt(news_items, top_n)
+    # Cap at 15 stories to avoid output truncation — take the most recent ones
+    candidate_stories = news_items[:15]
+    prompt = _load_prompt(candidate_stories, top_n)
 
     try:
         raw_response = _call_gemini(prompt)

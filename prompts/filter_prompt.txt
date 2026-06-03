@@ -24,7 +24,7 @@ Your task: Analyse the list of news items provided and select the TOP {TOP_N} mo
 ## Output Format
 
 Return ONLY a valid JSON array. No explanation, no markdown, no preamble.
-Keep the response COMPACT — return ONLY these fields per story (do NOT repeat the full title, summary, or key_facts):
+Keep the response COMPACT — return ONLY these fields per story:
 
 [
   {
@@ -38,12 +38,11 @@ Keep the response COMPACT — return ONLY these fields per story (do NOT repeat 
       "engagement_potential": 9
     },
     "composite_score": 8.2,
-    "why_selected": "One sentence explaining why this story will resonate on LinkedIn"
+    "why_selected": "max 8 words reason"
   }
 ]
 
-Sort by composite_score descending. Rank 1 = best story of the day (used for today's immediate post).
-Return exactly {TOP_N} items.
+Sort by composite_score descending. Return exactly {TOP_N} items. Rank 1 = best story.
 
 ## Input Stories
 {STORIES_JSON}
