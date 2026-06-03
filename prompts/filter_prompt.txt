@@ -23,18 +23,13 @@ Your task: Analyse the list of news items provided and select the TOP {TOP_N} mo
 
 ## Output Format
 
-Return ONLY a valid JSON array of the top {TOP_N} stories. No explanation, no markdown, no preamble.
+Return ONLY a valid JSON array. No explanation, no markdown, no preamble.
+Keep the response COMPACT — return ONLY these fields per story (do NOT repeat the full title, summary, or key_facts):
 
 [
   {
     "rank": 1,
     "id": <original id from input>,
-    "title": "...",
-    "summary": "...",
-    "source": "...",
-    "url": "...",
-    "category": "...",
-    "key_facts": [...],
     "scores": {
       "viral_potential": 8,
       "professional_relevance": 9,
@@ -48,6 +43,7 @@ Return ONLY a valid JSON array of the top {TOP_N} stories. No explanation, no ma
 ]
 
 Sort by composite_score descending. Rank 1 = best story of the day (used for today's immediate post).
+Return exactly {TOP_N} items.
 
 ## Input Stories
 {STORIES_JSON}

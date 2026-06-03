@@ -22,19 +22,40 @@ from utils.logger import log_step, log_success, log_warning, logger
 _PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "filter_prompt.txt"
 
 
+def _slim_stories(stories: list[dict]) -> list[dict]:
+    """Strip stories to minimal fields to keep the prompt small."""
+    return [
+        {
+            "id": s.get("id"),
+            "title": s.get("title", ""),
+            "summary": s.get("summary", "")[:200],   # truncate long summaries
+            "category": s.get("category", ""),
+            "published_date": s.get("published_date", ""),
+        }
+        for s in stories
+    ]
+
+
 def _load_prompt(stories: list[dict], top_n: int) -> str:
     template = _PROMPT_PATH.read_text(encoding="utf-8")
     return (
         template
         .replace("{TOP_N}", str(top_n))
-        .replace("{STORIES_JSON}", json.dumps(stories, indent=2, ensure_ascii=False))
+        .replace("{STORIES_JSON}", json.dumps(_slim_stories(stories), indent=2, ensure_ascii=False))
     )
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15))
 def _call_gemini(prompt: str) -> str:
     client = genai.Client(api_key=GEMINI_API_KEY)
-    response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt,
+        config=genai_types.GenerateContentConfig(
+            response_mime_type="application/json",  # Force valid JSON output
+            max_output_tokens=8192,
+        ),
+    )
     return response.text
 
 
@@ -74,14 +95,32 @@ def run(
         raise RuntimeError(f"Filtering agent Gemini call failed: {e}") from e
 
     try:
-        ranked_stories = extract_json(raw_response)
-        if not isinstance(ranked_stories, list):
+        scored = extract_json(raw_response)
+        if not isinstance(scored, list):
             raise ValueError("Expected a JSON array from filtering agent")
+
+        # Build a lookup from original stories by id
+        story_lookup = {str(s.get("id")): s for s in news_items}
+
+        # Merge scores back into the original story data
+        ranked_stories = []
+        for item in scored:
+            original_id = str(item.get("id", item.get("original_id", "")))
+            original = story_lookup.get(original_id, {})
+            merged = {
+                **original,
+                "rank": item.get("rank", len(ranked_stories) + 1),
+                "scores": item.get("scores", {}),
+                "composite_score": item.get("composite_score", 0),
+                "why_selected": item.get("why_selected", ""),
+            }
+            ranked_stories.append(merged)
+
         log_success(
             f"Filtering complete — top {len(ranked_stories)} stories selected\n"
             + "\n".join(
-                f"  #{i+1} [{s.get('composite_score', '?'):.1f}] {s.get('title', 'Unknown')}"
-                for i, s in enumerate(ranked_stories)
+                f"  #{s.get('rank')} [{s.get('composite_score', '?')}] {s.get('title', 'Unknown')}"
+                for s in ranked_stories
             )
         )
         return ranked_stories

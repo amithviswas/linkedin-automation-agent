@@ -26,6 +26,7 @@ def extract_json(text: str) -> Any:
     """
     Extract the first valid JSON object or array from a string.
     Handles cases where the model wraps JSON in markdown code fences.
+    Also attempts to repair truncated JSON arrays.
     """
     # Strip markdown fences if present
     cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("```").strip()
@@ -44,7 +45,58 @@ def extract_json(text: str) -> Any:
         except json.JSONDecodeError:
             pass
 
+    # ── JSON Repair: handle truncated arrays ─────────────────────────────────
+    # Find the start of a JSON array and try to recover complete objects
+    array_start = cleaned.find("[")
+    if array_start != -1:
+        fragment = cleaned[array_start:]
+        # Try to recover complete objects from a truncated array
+        repaired = _repair_truncated_json_array(fragment)
+        if repaired:
+            return repaired
+
     raise ValueError(f"No valid JSON found in model response:\n{text[:500]}")
+
+
+def _repair_truncated_json_array(fragment: str) -> Any:
+    """
+    Try to recover a partial JSON array by finding the last complete object.
+    Returns the list of complete objects, or None if none could be recovered.
+    """
+    # Find all complete JSON objects using a bracket counter
+    objects = []
+    depth = 0
+    start = None
+    in_string = False
+    escape_next = False
+
+    for i, ch in enumerate(fragment):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start is not None:
+                try:
+                    obj = json.loads(fragment[start : i + 1])
+                    objects.append(obj)
+                except json.JSONDecodeError:
+                    pass
+                start = None
+
+    return objects if objects else None
 
 
 def truncate(text: str, max_chars: int = 200) -> str:

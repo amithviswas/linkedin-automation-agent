@@ -41,7 +41,8 @@ def _call_gemini(prompt: str) -> str:
         config=genai_types.GenerateContentConfig(
             temperature=0.85,
             top_p=0.95,
-            max_output_tokens=4096,
+            max_output_tokens=8192,
+            response_mime_type="application/json",  # Force valid JSON output
         ),
     )
     return response.text
