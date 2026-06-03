@@ -2,31 +2,29 @@ name: LinkedIn Daily Content Automation
 
 on:
   schedule:
-    # 8:00 AM IST = 2:30 AM UTC
-    - cron: '30 2 * * 1-5'   # Monday to Friday only
-  workflow_dispatch:           # Allow manual trigger from GitHub UI
+    # 8:00 AM IST = 2:30 AM UTC  (Mon–Fri)
+    - cron: '30 2 * * 1-5'
+  workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Run in dry-run mode (no external writes)'
+        description: 'Dry run (no Make.com post)?'
         required: false
         default: 'false'
         type: choice
-        options:
-          - 'true'
-          - 'false'
+        options: ['false', 'true']
       story_count:
-        description: 'Number of top stories to generate (1-10)'
+        description: 'Number of stories (1-5)'
         required: false
         default: '5'
 
 jobs:
   run-agent:
-    name: Run LinkedIn Content Pipeline
+    name: Generate & Post LinkedIn Content
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python 3.11
@@ -41,22 +39,21 @@ jobs:
       - name: Run LinkedIn Automation Agent
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GOOGLE_SHEETS_CREDS: ${{ secrets.GOOGLE_SHEETS_CREDS }}
-          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
-          GOOGLE_SHEET_TAB: ${{ secrets.GOOGLE_SHEET_TAB || 'PostQueue' }}
+          GEMINI_MODEL: gemini-2.5-flash
           MAKE_WEBHOOK_URL: ${{ secrets.MAKE_WEBHOOK_URL }}
-          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          USE_LOCAL_STORAGE: "true"
           TOP_STORIES_COUNT: ${{ github.event.inputs.story_count || '5' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          GOOGLE_SHEETS_CREDS: ""
+          GOOGLE_SHEET_ID: ""
+          GOOGLE_SHEET_TAB: "PostQueue"
         run: |
-          python main.py \
-            ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }} \
-            --story-count ${{ github.event.inputs.story_count || '5' }}
+          python main.py --story-count ${{ github.event.inputs.story_count || '5' }}
 
-      - name: Upload logs on failure
-        if: failure()
+      - name: Upload generated posts as artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: agent-logs-${{ github.run_id }}
-          path: |
-            *.log
-          retention-days: 7
+          name: linkedin-posts-${{ github.run_id }}
+          path: posts_output/
+          retention-days: 30

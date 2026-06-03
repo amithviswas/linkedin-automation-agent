@@ -7,11 +7,14 @@ India audience fit — then returns the top N ranked stories.
 """
 
 import json
+import re
+import time
 from pathlib import Path
 from typing import Any
 
 from google import genai
 from google.genai import types as genai_types
+from google.genai.errors import ClientError
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import GEMINI_API_KEY, GEMINI_MODEL, TOP_STORIES_COUNT
@@ -45,18 +48,35 @@ def _load_prompt(stories: list[dict], top_n: int) -> str:
     )
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15))
 def _call_gemini(prompt: str) -> str:
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config=genai_types.GenerateContentConfig(
-            response_mime_type="application/json",  # Force valid JSON output
-            max_output_tokens=8192,
-        ),
-    )
-    return response.text
+    """Call Gemini with smart 429/daily-quota detection."""
+    for attempt in range(3):
+        try:
+            client = genai.Client(api_key=GEMINI_API_KEY)
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    max_output_tokens=8192,
+                ),
+            )
+            return response.text
+        except ClientError as e:
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                delay_match = re.search(r"retry in ([\d.]+)s", err_str)
+                wait_secs = float(delay_match.group(1)) + 5 if delay_match else 60
+                if "PerDay" in err_str and attempt == 0:
+                    raise RuntimeError(
+                        f"Daily API quota exhausted. Resets midnight UTC. "
+                        f"GitHub Actions will run fine tomorrow at 8 AM IST."
+                    ) from e
+                logger.warning(f"Rate limited — waiting {wait_secs:.0f}s (attempt {attempt+1}/3)...")
+                time.sleep(wait_secs)
+            else:
+                raise
+    raise RuntimeError("Max retries exceeded")
 
 
 def run(
