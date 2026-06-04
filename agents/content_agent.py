@@ -36,8 +36,9 @@ def _load_prompt(story: dict) -> str:
 
 
 def _call_gemini(prompt: str) -> str:
-    """Call Gemini with smart 429 handling — waits the exact retry delay from the error."""
-    for attempt in range(3):
+    """Call Gemini with smart 429 handling — waits and retries up to 5 times."""
+    max_attempts = 5
+    for attempt in range(max_attempts):
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
             response = client.models.generate_content(
@@ -54,21 +55,24 @@ def _call_gemini(prompt: str) -> str:
         except ClientError as e:
             err_str = str(e)
             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                # Extract retry delay from error message
                 delay_match = re.search(r"retry in ([\d.]+)s", err_str)
-                wait_secs = float(delay_match.group(1)) + 5 if delay_match else 60
-                # Check if it's a daily quota (not worth retrying today)
-                if "PerDay" in err_str and attempt == 0:
+                if delay_match:
+                    # API told us exactly how long to wait — respect it + small buffer
+                    wait_secs = float(delay_match.group(1)) + 5
+                    logger.warning(
+                        f"Rate limited — waiting {wait_secs:.0f}s then retrying "
+                        f"(attempt {attempt + 1}/{max_attempts})..."
+                    )
+                    time.sleep(wait_secs)
+                else:
+                    # No retry hint → truly exhausted for the day
                     raise RuntimeError(
-                        f"Daily API quota exhausted for {GEMINI_MODEL}. "
-                        f"Quota resets at midnight UTC. "
-                        f"GitHub Actions will run successfully tomorrow at 8 AM IST."
+                        f"Daily API quota exhausted for model '{GEMINI_MODEL}'. "
+                        f"Quota resets at midnight UTC (5:30 AM IST)."
                     ) from e
-                logger.warning(f"Rate limited — waiting {wait_secs:.0f}s before retry {attempt+1}/3...")
-                time.sleep(wait_secs)
             else:
                 raise
-    raise RuntimeError("Max retries exceeded on Gemini API call")
+    raise RuntimeError(f"Max retries ({max_attempts}) exceeded on Gemini API call")
 
 
 def run_for_story(story: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
