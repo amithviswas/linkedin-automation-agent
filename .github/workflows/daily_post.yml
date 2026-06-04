@@ -2,8 +2,10 @@ name: LinkedIn Daily Content Automation
 
 on:
   schedule:
-    # 8:00 AM IST = 2:30 AM UTC  (Mon–Fri)
+    # ── Morning post: 8:00 AM IST = 2:30 AM UTC  (Mon–Fri) ──────────────────
     - cron: '30 2 * * 1-5'
+    # ── Evening post: 6:00 PM IST = 12:30 PM UTC (Mon–Fri) ──────────────────
+    - cron: '30 12 * * 1-5'
   workflow_dispatch:
     inputs:
       dry_run:
