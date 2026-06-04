@@ -41,7 +41,7 @@ jobs:
       - name: Run LinkedIn Automation Agent
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: gemini-2.0-flash-lite
+          GEMINI_MODEL: gemini-2.5-flash
           MAKE_WEBHOOK_URL: ${{ secrets.MAKE_WEBHOOK_URL }}
           USE_LOCAL_STORAGE: "true"
           TOP_STORIES_COUNT: ${{ github.event.inputs.story_count || '5' }}

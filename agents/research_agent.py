@@ -6,12 +6,14 @@ tech & AI news from across the web. Returns a structured list of news items.
 """
 
 import json
+import re
+import time
 from pathlib import Path
 from typing import Any
 
 from google import genai
 from google.genai import types as genai_types
-from tenacity import retry, stop_after_attempt, wait_exponential
+from google.genai.errors import ClientError
 
 from config.settings import GEMINI_API_KEY, GEMINI_MODEL
 from utils.helpers import extract_json, today_str
@@ -26,21 +28,42 @@ def _load_prompt() -> str:
     return template.replace("{TODAY}", today_str())
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15))
 def _call_gemini_with_search(prompt: str) -> str:
     """
     Call Gemini with Google Search grounding enabled.
-    This gives the model real-time access to current web content.
+    Includes smart 429 retry that waits the exact delay suggested by the API.
     """
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config=genai_types.GenerateContentConfig(
-            tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-        ),
-    )
-    return response.text
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        try:
+            client = genai.Client(api_key=GEMINI_API_KEY)
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+                ),
+            )
+            return response.text
+        except ClientError as e:
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                delay_match = re.search(r"retry in ([\d.]+)s", err_str)
+                if delay_match:
+                    wait_secs = float(delay_match.group(1)) + 5
+                    logger.warning(
+                        f"Rate limited (research) — waiting {wait_secs:.0f}s then retrying "
+                        f"(attempt {attempt + 1}/{max_attempts})..."
+                    )
+                    time.sleep(wait_secs)
+                else:
+                    raise RuntimeError(
+                        f"Daily API quota exhausted for model '{GEMINI_MODEL}'. "
+                        f"Quota resets at midnight UTC (5:30 AM IST)."
+                    ) from e
+            else:
+                raise
+    raise RuntimeError(f"Max retries ({max_attempts}) exceeded in research agent")
 
 
 def run(dry_run: bool = False) -> list[dict[str, Any]]:

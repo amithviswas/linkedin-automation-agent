@@ -1,11 +1,14 @@
 """
 agents/content_agent.py
 ────────────────────────
-For each of the top N filtered stories, calls Gemini to generate three
-LinkedIn content formats:
+For the top N filtered stories, calls Gemini ONCE (batch) to generate three
+LinkedIn content formats per story:
   1. Text Post  (full LinkedIn post with hook, insight, CTA, hashtags)
   2. Carousel   (6-slide script with headlines, body, design notes + caption)
   3. Short Take (2-liner punch)
+
+This batch approach uses only ONE API call regardless of how many stories
+there are — saving quota and reducing rate-limit risk dramatically.
 """
 
 import json
@@ -17,25 +20,42 @@ from typing import Any
 from google import genai
 from google.genai import types as genai_types
 from google.genai.errors import ClientError
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import GEMINI_API_KEY, GEMINI_MODEL
 from utils.helpers import extract_json, today_str
 from utils.logger import log_step, log_success, log_warning, logger
 
 # ── Setup ────────────────────────────────────────────────────────────────────
-_PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "content_prompt.txt"
+_BATCH_PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "content_prompt_batch.txt"
+_SINGLE_PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "content_prompt.txt"
 
 
-def _load_prompt(story: dict) -> str:
-    template = _PROMPT_PATH.read_text(encoding="utf-8")
-    return template.replace(
-        "{STORY_JSON}",
-        json.dumps(story, indent=2, ensure_ascii=False),
-    )
+def _load_batch_prompt(stories: list[dict]) -> str:
+    """Load the batch prompt and inject all stories as JSON."""
+    template = _BATCH_PROMPT_PATH.read_text(encoding="utf-8")
+    slim_stories = [
+        {
+            "id": s.get("id"),
+            "title": s.get("title", ""),
+            "summary": s.get("summary", ""),
+            "source": s.get("source", ""),
+            "category": s.get("category", ""),
+            "key_facts": s.get("key_facts", []),
+            "why_selected": s.get("why_selected", ""),
+            "composite_score": s.get("composite_score", 0),
+        }
+        for s in stories
+    ]
+    return template.replace("{STORIES_JSON}", json.dumps(slim_stories, indent=2, ensure_ascii=False))
 
 
-def _call_gemini(prompt: str) -> str:
+def _load_single_prompt(story: dict) -> str:
+    """Fallback: load the single-story prompt."""
+    template = _SINGLE_PROMPT_PATH.read_text(encoding="utf-8")
+    return template.replace("{STORY_JSON}", json.dumps(story, indent=2, ensure_ascii=False))
+
+
+def _call_gemini(prompt: str, max_tokens: int = 32000) -> str:
     """Call Gemini with smart 429 handling — waits and retries up to 5 times."""
     max_attempts = 5
     for attempt in range(max_attempts):
@@ -47,7 +67,7 @@ def _call_gemini(prompt: str) -> str:
                 config=genai_types.GenerateContentConfig(
                     temperature=0.85,
                     top_p=0.95,
-                    max_output_tokens=8192,
+                    max_output_tokens=max_tokens,
                     response_mime_type="application/json",
                 ),
             )
@@ -57,7 +77,6 @@ def _call_gemini(prompt: str) -> str:
             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
                 delay_match = re.search(r"retry in ([\d.]+)s", err_str)
                 if delay_match:
-                    # API told us exactly how long to wait — respect it + small buffer
                     wait_secs = float(delay_match.group(1)) + 5
                     logger.warning(
                         f"Rate limited — waiting {wait_secs:.0f}s then retrying "
@@ -65,7 +84,6 @@ def _call_gemini(prompt: str) -> str:
                     )
                     time.sleep(wait_secs)
                 else:
-                    # No retry hint → truly exhausted for the day
                     raise RuntimeError(
                         f"Daily API quota exhausted for model '{GEMINI_MODEL}'. "
                         f"Quota resets at midnight UTC (5:30 AM IST)."
@@ -75,47 +93,12 @@ def _call_gemini(prompt: str) -> str:
     raise RuntimeError(f"Max retries ({max_attempts}) exceeded on Gemini API call")
 
 
-def run_for_story(story: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
-    """
-    Generate all 3 content formats for a single story.
-
-    Args:
-        story: A filtered story dict from filtering_agent.run()
-        dry_run: If True, return mock content
-
-    Returns:
-        Content dict with text_post, carousel, short_take fields.
-    """
-    title = story.get("title", "Unknown")
-    story_id = story.get("id", 0)
-
-    logger.info(f"  Generating content for story #{story_id}: {title[:60]}...")
-
-    if dry_run:
-        return _mock_content(story)
-
-    prompt = _load_prompt(story)
-
-    try:
-        raw_response = _call_gemini(prompt)
-        logger.debug(f"Raw content response (first 500 chars):\n{raw_response[:500]}")
-    except Exception as e:
-        raise RuntimeError(f"Content agent failed for story '{title}': {e}") from e
-
-    try:
-        content = extract_json(raw_response)
-        log_success(f"  ✓ Content generated for: {title[:60]}")
-        return content
-    except ValueError as e:
-        raise RuntimeError(f"Content agent returned invalid JSON for '{title}': {e}") from e
-
-
 def run(
     filtered_stories: list[dict[str, Any]],
     dry_run: bool = False,
 ) -> list[dict[str, Any]]:
     """
-    Generate content for all filtered stories.
+    Generate all 3 content formats for ALL filtered stories in ONE API call.
 
     Args:
         filtered_stories: Ranked story list from filtering_agent.run()
@@ -124,14 +107,80 @@ def run(
     Returns:
         List of content dicts, one per story, in the same rank order.
     """
-    log_step("CONTENT AGENT", f"Generating 3 content formats for {len(filtered_stories)} stories")
+    log_step("CONTENT AGENT", f"Generating 3 content formats for {len(filtered_stories)} stories (batch mode)")
 
+    if dry_run:
+        log_warning("DRY RUN — returning mock content")
+        return [_mock_content(s) for s in filtered_stories]
+
+    # ── Try batch generation first (1 API call for all stories) ─────────────
+    try:
+        prompt = _load_batch_prompt(filtered_stories)
+        raw_response = _call_gemini(prompt, max_tokens=32000)
+        logger.debug(f"Raw batch content response (first 500 chars):\n{raw_response[:500]}")
+
+        batch_results = extract_json(raw_response)
+
+        if not isinstance(batch_results, list):
+            raise ValueError("Batch content agent returned a non-array JSON response")
+
+        if len(batch_results) < len(filtered_stories):
+            logger.warning(
+                f"Batch returned {len(batch_results)}/{len(filtered_stories)} stories — "
+                f"will use mock for missing ones"
+            )
+
+        # Attach metadata to each result
+        results = []
+        for i, story in enumerate(filtered_stories):
+            if i < len(batch_results):
+                content = batch_results[i]
+            else:
+                logger.warning(f"  Missing content for story #{i+1}, using mock")
+                content = _mock_content(story)
+
+            content["_meta"] = {
+                "rank": story.get("rank", i + 1),
+                "story_title": story.get("title", ""),
+                "source": story.get("source", ""),
+                "url": story.get("url", ""),
+                "category": story.get("category", ""),
+                "composite_score": story.get("composite_score", 0),
+                "generated_date": today_str(),
+            }
+            results.append(content)
+
+        log_success(f"Batch content generation complete — {len(results)} posts ready (1 API call)")
+        return results
+
+    except Exception as batch_error:
+        # ── Fallback: generate per-story (uses more API calls) ───────────────
+        logger.warning(
+            f"Batch generation failed ({batch_error}). "
+            f"Falling back to per-story generation..."
+        )
+        return _run_per_story(filtered_stories)
+
+
+def _run_per_story(filtered_stories: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fallback: generate content story-by-story (uses more API calls)."""
     results = []
     for story in filtered_stories:
-        content = run_for_story(story, dry_run=dry_run)
-        # Attach metadata for Sheets storage
+        title = story.get("title", "Unknown")
+        story_id = story.get("id", 0)
+        logger.info(f"  Generating content for story #{story_id}: {title[:60]}...")
+
+        prompt = _load_single_prompt(story)
+        try:
+            raw_response = _call_gemini(prompt, max_tokens=8192)
+            content = extract_json(raw_response)
+            log_success(f"  ✓ Content generated for: {title[:60]}")
+        except Exception as e:
+            logger.warning(f"  ✗ Failed for '{title}': {e} — using mock")
+            content = _mock_content(story)
+
         content["_meta"] = {
-            "rank": story.get("rank", 0),
+            "rank": story.get("rank", len(results) + 1),
             "story_title": story.get("title", ""),
             "source": story.get("source", ""),
             "url": story.get("url", ""),
@@ -141,7 +190,7 @@ def run(
         }
         results.append(content)
 
-    log_success(f"Content generation complete — {len(results)} posts ready")
+    log_success(f"Per-story content generation complete — {len(results)} posts ready")
     return results
 
 
@@ -168,59 +217,14 @@ def _mock_content(story: dict) -> dict:
         },
         "carousel": {
             "slides": [
-                {
-                    "slide_number": 1,
-                    "type": "hook",
-                    "headline": title[:40],
-                    "subtext": "What you need to know in 60 seconds",
-                    "design_note": "Dark background, bold white headline, single accent colour",
-                },
-                {
-                    "slide_number": 2,
-                    "type": "what_happened",
-                    "headline": "What happened?",
-                    "body": story.get("summary", "A major development in tech/AI."),
-                    "design_note": "Clean white card, left-aligned text",
-                },
-                {
-                    "slide_number": 3,
-                    "type": "why_it_matters",
-                    "headline": "Why it matters",
-                    "body": "This changes how developers and founders work. The impact is real.",
-                    "design_note": "Stat as visual hero element",
-                },
-                {
-                    "slide_number": 4,
-                    "type": "how_to_use",
-                    "headline": "How you can use this",
-                    "body": "• Try the free tier today\n• Integrate into your workflow\n• Share with your team",
-                    "design_note": "Numbered list, high contrast",
-                },
-                {
-                    "slide_number": 5,
-                    "type": "my_take",
-                    "headline": "My honest take",
-                    "body": "This is genuinely exciting. If you haven't tried this yet, you're falling behind.",
-                    "design_note": "Pull quote style",
-                },
-                {
-                    "slide_number": 6,
-                    "type": "cta",
-                    "headline": "Found this useful?",
-                    "sub_actions": [
-                        "Follow for daily AI + tech insights",
-                        "Save this carousel for later",
-                        "Comment: Which point surprised you most?",
-                    ],
-                    "design_note": "Brand-consistent, energetic finish",
-                },
+                {"slide_number": 1, "type": "hook", "headline": title[:40], "subtext": "What you need to know in 60 seconds", "design_note": "Dark background, bold white headline"},
+                {"slide_number": 2, "type": "what_happened", "headline": "What happened?", "body": story.get("summary", "A major development.")[:150], "design_note": "Clean white card"},
+                {"slide_number": 3, "type": "why_it_matters", "headline": "Why it matters", "body": "This changes how developers and founders work.", "design_note": "Stat as visual hero"},
+                {"slide_number": 4, "type": "how_to_use", "headline": "How you can use this", "body": "• Try the free tier today\n• Integrate into your workflow\n• Share with your team", "design_note": "Numbered list"},
+                {"slide_number": 5, "type": "my_take", "headline": "My honest take", "body": "This is genuinely exciting. Don't sleep on it.", "design_note": "Pull quote style"},
+                {"slide_number": 6, "type": "cta", "headline": "Found this useful?", "sub_actions": ["Follow for daily AI + tech insights", "Save this carousel for later", "Comment: Which point surprised you most?"], "design_note": "Brand-consistent finish"},
             ],
-            "caption": (
-                f"🧵 {title}\n\n"
-                "Swipe through for the full breakdown.\n\n"
-                "Save this carousel — it'll be useful 🔖\n\n"
-                "#AITools #Technology #Innovation"
-            ),
+            "caption": f"🧵 {title}\n\nSwipe through for the full breakdown.\n\n#AITools #Technology #Innovation",
         },
         "short_take": {
             "line1": f"{title} — and the tech world is paying attention.",
