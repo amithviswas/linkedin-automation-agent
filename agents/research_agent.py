@@ -73,7 +73,7 @@ def run(dry_run: bool = False) -> list[dict[str, Any]]:
     Returns:
         List of raw news item dicts (70-80 items).
     """
-    log_step("RESEARCH AGENT", f"Fetching today's top tech & AI news — 100+ stories ({today_str()})")
+    log_step("RESEARCH AGENT", f"Fetching today's global tech & AI news — 150+ stories from 65 sources ({today_str()})")
 
     if dry_run:
         log_warning("DRY RUN — returning mock research data")
