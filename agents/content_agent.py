@@ -39,6 +39,7 @@ def _load_batch_prompt(stories: list[dict]) -> str:
             "title": s.get("title", ""),
             "summary": s.get("summary", ""),
             "source": s.get("source", ""),
+            "url": s.get("url", ""),
             "category": s.get("category", ""),
             "key_facts": s.get("key_facts", []),
             "why_selected": s.get("why_selected", ""),

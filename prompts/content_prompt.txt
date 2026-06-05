@@ -32,12 +32,15 @@ Line 10: Engagement CTA — a direct question to the reader
 [blank line]
 Line 11: Save/share CTA
 [blank line]
-Lines 12-13: 7-10 relevant hashtags
+Line 12: 📖 Read more: [use the url from the story input — this is MANDATORY]
+[blank line]
+Lines 13-14: 7-10 relevant hashtags
 
 Rules:
 - Total post length: 1200–1800 characters (sweet spot for LinkedIn reach)
 - First 3 lines must be gripping (visible before "see more" cut)
 - No bullet points — flowing narrative style
+- ALWAYS include the source URL at the end as "📖 Read more: <url>" — this gives readers a place to learn more
 - End with 3-5 niche hashtags + 2-3 broad hashtags
 
 ---
@@ -103,8 +106,9 @@ Return ONLY a valid JSON object. No explanation, no markdown, no preamble.
 {
   "story_id": <id>,
   "story_title": "...",
+  "source_url": "<url from the input story — include as-is>",
   "text_post": {
-    "content": "Full LinkedIn post text exactly as it should be published. Include emojis, line breaks (use \\n), hashtags.",
+    "content": "Full LinkedIn post text exactly as it should be published. Include emojis, line breaks (use \\n), the '📖 Read more: <url>' line before hashtags, and hashtags at the end.",
     "char_count": 1450,
     "hook": "First line of the post",
     "hashtags": ["#AITools", "#Tech", ...]
