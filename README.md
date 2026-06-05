@@ -1,36 +1,66 @@
 # 🤖 LinkedIn Automation Agent
 
-> Fully autonomous AI LinkedIn Content Engine — researches, writes, and publishes daily posts using Gemini 2.0 Flash + GitHub Actions + Google Sheets + Make.com. **Total cost: ₹0/month.**
+> A fully autonomous AI-powered LinkedIn content engine that researches **150+ global tech & AI news stories** from **65+ sources**, picks the best ones, writes viral LinkedIn posts, and publishes them automatically — **twice daily on weekdays and 3x on weekends**. Total cost: **₹0/month**.
+
+![GitHub Actions](https://img.shields.io/github/actions/workflow/status/amithviswas/linkedin-automation-agent/daily_post.yml?label=Auto%20Post&logo=github)
+![Model](https://img.shields.io/badge/AI-Gemini%202.5%20Flash-blue?logo=google)
+![Made with Python](https://img.shields.io/badge/Made%20with-Python%203.11-yellow?logo=python)
 
 ---
 
-## 🏗️ Architecture
+## 🚀 What It Does
+
+Every day, this agent:
+
+1. 🔍 **Researches** 150+ real news stories from 65 global sources (TechCrunch, The Verge, Hacker News, OpenAI Blog, Reddit, and more)
+2. 🏆 **Filters** them down to the top 5 most viral, engaging stories using AI scoring
+3. ✍️ **Writes** a full LinkedIn post with a scroll-stopping hook, insights, opinion, CTA, and a **📖 Read more** link to the original source
+4. 📤 **Posts** directly to your LinkedIn profile via Make.com — fully hands-free
+
+---
+
+## 📅 Automatic Posting Schedule
+
+| Day | Post Times (IST) | Posts Per Day |
+|-----|-----------------|--------------|
+| Monday – Friday | **8:00 AM** and **6:00 PM** | 2 |
+| Saturday – Sunday | **8:00 AM**, **12:00 PM**, and **6:00 PM** | 3 |
+
+**Total: 16 posts per week — all fully automated, zero manual effort.**
+
+---
+
+## 🏗️ How It Works
 
 ```
-GitHub Actions (8 AM IST, Mon–Fri)
-         │
-         ▼
- Research Agent ──────────────────── Gemini 2.0 Flash + Google Search
- Fetches 15-20 tech/AI news items    (HackerNews, TechCrunch, AI blogs...)
-         │
-         ▼
- Filtering Agent ─────────────────── Gemini 2.0 Flash
- Scores & selects top 5 stories      (viral potential × relevance × India fit)
-         │
-         ▼
- Content Agent ───────────────────── Gemini 2.0 Flash (temp: 0.85)
- Generates 3 formats per story:      ① Text Post  ② Carousel Script  ③ Short Take
-         │
-         ▼
- Google Sheets (PostQueue tab) ────── gspread + Service Account
- All 5 posts stored with schedule
-         │
-         ▼
- Make.com Webhook ─────────────────── httpx POST
- Today's #1 post auto-published       LinkedIn auto-posting scenario
-         │
-         ▼
- LinkedIn Profile 🚀
+GitHub Actions / Windows Task Scheduler
+              │
+              ▼
+    ┌─────────────────────┐
+    │   Research Agent    │  ← Gemini 2.5 Flash + Google Search Grounding
+    │  150+ stories from  │    Searches 65 global sources: TechCrunch,
+    │   65 global sources │    The Verge, HackerNews, OpenAI Blog, Reddit...
+    └─────────┬───────────┘
+              │
+              ▼
+    ┌─────────────────────┐
+    │   Filtering Agent   │  ← Gemini 2.5 Flash
+    │  Picks Top 5 Stories│    Scores by: viral potential, relevance,
+    │  from 150+ found    │    engagement, recency, uniqueness
+    └─────────┬───────────┘
+              │
+              ▼
+    ┌─────────────────────┐
+    │   Content Agent     │  ← Gemini 2.5 Flash (Batch Mode — 1 API call)
+    │  Generates post for │    Hook → Insights → Opinion → CTA
+    │  the #1 story       │    + 📖 Read more: <source URL>
+    └─────────┬───────────┘
+              │
+         ┌────┴─────┐
+         │          │
+         ▼          ▼
+   Local Storage  Make.com Webhook
+   posts_output/  → LinkedIn Profile 🚀
 ```
 
 ---
@@ -38,35 +68,43 @@ GitHub Actions (8 AM IST, Mon–Fri)
 ## 📁 Project Structure
 
 ```
-linkedin-agent/
-├── main.py                          # Orchestrator — run this
+linkedin-automation-agent/
+├── main.py                        # Orchestrator — run this to trigger everything
+├── run_agent.bat                  # Windows Task Scheduler wrapper
+├── resend_webhook.py              # Re-fire today's post without re-running agent
 ├── requirements.txt
-├── .env.example                     # Copy to .env and fill in secrets
+├── .env.example                   # Copy to .env and fill in your secrets
 │
 ├── agents/
-│   ├── research_agent.py            # Fetches news via Gemini + Google Search
-│   ├── filtering_agent.py           # Scores & ranks stories
-│   └── content_agent.py             # Generates LinkedIn content
+│   ├── research_agent.py          # Fetches 150+ stories via Gemini + Google Search
+│   ├── filtering_agent.py         # Scores & selects the top 5 stories
+│   └── content_agent.py           # Generates LinkedIn post (batch mode, 1 API call)
 │
 ├── integrations/
-│   ├── sheets.py                    # Google Sheets post queue
-│   └── make_webhook.py              # Make.com LinkedIn posting trigger
+│   ├── make_webhook.py            # Sends the top post to Make.com → LinkedIn
+│   └── local_storage.py           # Saves all generated posts locally
 │
 ├── prompts/
-│   ├── research_prompt.txt          # Research agent system prompt
-│   ├── filter_prompt.txt            # Filtering agent system prompt
-│   └── content_prompt.txt           # Content generation system prompt
+│   ├── research_prompt.txt        # Instructs Gemini to research 150+ stories from 65 sources
+│   ├── filter_prompt.txt          # Scoring criteria for picking the best stories
+│   ├── content_prompt_batch.txt   # Batch post generation prompt (all 5 stories, 1 API call)
+│   └── content_prompt.txt         # Fallback single-story prompt
 │
 ├── config/
-│   └── settings.py                  # Env var loader
+│   └── settings.py                # Environment variable loader
 │
 ├── utils/
-│   ├── logger.py                    # Rich-powered logger
-│   └── helpers.py                   # Shared utilities
+│   ├── logger.py                  # Rich-powered terminal logger
+│   └── helpers.py                 # Shared utilities (JSON extractor, date helpers)
+│
+├── posts_output/                  # Generated posts saved here by date
+│   └── YYYY-MM-DD/
+│       ├── post_1_text.txt        # Ready-to-post LinkedIn text
+│       └── summary.md             # Daily overview of all 5 stories
 │
 └── .github/
     └── workflows/
-        └── daily_post.yml           # GitHub Actions schedule
+        └── daily_post.yml         # GitHub Actions — runs on the full weekly schedule
 ```
 
 ---
@@ -76,7 +114,7 @@ linkedin-agent/
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/linkedin-automation-agent.git
+git clone https://github.com/amithviswas/linkedin-automation-agent.git
 cd linkedin-automation-agent
 pip install -r requirements.txt
 ```
@@ -88,82 +126,49 @@ cp .env.example .env
 # Edit .env and fill in your API keys
 ```
 
-Required secrets:
+Required environment variables:
 
-| Secret | How to Get |
-|--------|-----------|
+| Variable | How to Get |
+|----------|-----------|
 | `GEMINI_API_KEY` | [Google AI Studio](https://aistudio.google.com/) → Get API key |
-| `GOOGLE_SHEETS_CREDS` | Google Cloud Console → Service Account → JSON key |
-| `GOOGLE_SHEET_ID` | From your Google Sheet URL |
-| `MAKE_WEBHOOK_URL` | Make.com → Webhooks → Custom webhook |
+| `MAKE_WEBHOOK_URL` | Make.com → Webhooks → Custom Webhook → Copy URL |
+| `GEMINI_MODEL` | Set to `gemini-2.5-flash` |
+| `USE_LOCAL_STORAGE` | Set to `true` |
 
-### 3. Test Locally (Dry Run)
+### 3. Test Locally
 
 ```bash
-# Test the full pipeline without writing to Sheets or posting
+# Dry run — no API calls, no posting
 python main.py --dry-run
 
-# Test with fewer stories
-python main.py --dry-run --story-count 2
+# Full run — researches news and posts to LinkedIn
+python main.py
+
+# Generate for fewer stories (faster test)
+python main.py --story-count 2
 ```
 
-### 4. Full Run
+### 4. Resend Today's Post (Without Re-Running)
 
 ```bash
-python main.py
+python resend_webhook.py
 ```
-
----
-
-## 🔧 Google Sheets Setup
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project (or use existing)
-3. Enable **Google Sheets API** and **Google Drive API**
-4. Create a **Service Account** → Download JSON key
-5. Create a Google Sheet and **share it** with the service account email
-6. Copy the Sheet ID from the URL into your `.env`
-
-The agent will **auto-create** the `PostQueue` tab with proper column headers on first run.
-
-### Sheet Columns
-
-| Column | Content |
-|--------|---------|
-| A | Date |
-| B | Rank |
-| C | Story Title |
-| D | Source |
-| E | Category |
-| F | Composite Score |
-| G | Content Type |
-| H | Post Content |
-| I | Hashtags |
-| J | Carousel Slides JSON |
-| K | Short Take |
-| L | Status (PENDING/POSTED/SKIPPED) |
-| M | Scheduled Time |
-| N | Posted At |
-| O | Source URL |
-| P | Notes |
 
 ---
 
 ## 🔌 Make.com Setup
 
-1. Go to [Make.com](https://make.com/) → Create a new Scenario
-2. **Trigger**: Webhooks → Custom Webhook → Copy the URL
-3. **Action 1**: LinkedIn → Create a Share / Text Post
-   - Use `{{1.post_content}}` as the post body
-4. **Action 2** (optional): Google Sheets → Update Row
-   - Set Status = `POSTED`, Posted At = `{{now}}`
-5. Paste the webhook URL as `MAKE_WEBHOOK_URL` in your `.env`
+1. Go to [Make.com](https://make.com/) → **Create a new Scenario**
+2. **Trigger**: Webhooks → Custom Webhook → Copy the URL → paste as `MAKE_WEBHOOK_URL` in `.env`
+3. **Action**: LinkedIn → **Create User Text Post**
+   - In the text field, use the variable picker to select **`post_content`** (purple bubble)
+4. Click **Save** → Toggle the scenario **ON** (blue toggle at bottom left)
 
-> **Note:** Make.com free tier gives 1,000 operations/month — plenty for 1 post/day.
+> ⚠️ **Important:** The scenario toggle MUST be ON (blue) for posts to go through. If it's off, webhooks queue up but nothing posts.
 
 ---
 
-## 🚀 GitHub Actions Setup
+## ☁️ GitHub Actions Setup
 
 1. Push this repo to GitHub
 2. Go to **Settings → Secrets and Variables → Actions**
@@ -171,72 +176,96 @@ The agent will **auto-create** the `PostQueue` tab with proper column headers on
 
 ```
 GEMINI_API_KEY
-GOOGLE_SHEETS_CREDS    ← paste the full JSON as a single line
-GOOGLE_SHEET_ID
 MAKE_WEBHOOK_URL
+GEMINI_MODEL        ← set value to: gemini-2.5-flash
+USE_LOCAL_STORAGE   ← set value to: true
 ```
 
-4. The workflow runs automatically **Mon–Fri at 8:00 AM IST**
-5. To run manually: **Actions → LinkedIn Daily Content Automation → Run workflow**
+4. The workflow runs automatically on the full weekly schedule (Mon–Fri 2x, Sat–Sun 3x)
+5. To trigger manually: **Actions → LinkedIn Daily Content Automation → Run workflow**
 
 ---
 
-## 📅 Daily Posting Schedule
+## 🪟 Windows Task Scheduler (Local Fallback)
 
-| Day | Content Type |
-|-----|-------------|
-| Monday | Carousel — Weekly AI roundup |
-| Tuesday | Text post — Hot take / opinion |
-| Wednesday | Short take — Quick insight |
-| Thursday | Carousel — Tool spotlight |
-| Friday | Text post — What I learned this week |
+If GitHub Actions doesn't fire reliably, you can use Windows Task Scheduler as a local fallback:
 
----
+- **Task 1**: Run `d:\Linkdin\run_agent.bat` — Mon–Fri at **8:00 AM** and **6:00 PM**
+- **Task 2**: Run `d:\Linkdin\run_agent.bat` — Sat–Sun at **8:00 AM**, **12:00 PM**, **6:00 PM**
 
-## 📝 Generated Content Formats
-
-### Format 1: LinkedIn Text Post
-- Scroll-stopping hook → Punchy insights → Personal opinion → Engagement CTA → Hashtags
-- Optimised for 1,200–1,800 characters (LinkedIn sweet spot)
-
-### Format 2: Carousel Script (6 Slides)
-- Hook → What happened → Why it matters → How to use it → My take → CTA
-- With design notes for each slide
-
-### Format 3: Short Take
-- 2-line punch — high reach, great for quick engagement
+> Note: Tasks run in "Interactive only" mode — the PC must be logged in and unlocked.
 
 ---
 
-## 🛠️ CLI Options
+## 📝 Generated Post Format
 
-```bash
-python main.py [OPTIONS]
+Every post follows this proven LinkedIn structure:
 
-Options:
-  --dry-run           Skip external API writes (Sheets + Make.com)
-  --story-count N     Generate content for N top stories (default: 5)
-  -h, --help
 ```
+🔥 [Scroll-stopping hook — surprising stat or bold claim]
+
+[5-6 short, punchy insight sentences — each line = one idea]
+
+[Personal opinion or contrarian take]
+
+[Engagement CTA — a question to spark comments]
+
+Save this post if you found it useful 🔖
+
+📖 Read more: https://source-article-url.com
+
+#AITools #GenAI #FutureOfWork #Technology #Innovation
+```
+
+---
+
+## 🌍 Research Coverage — 65 Global Sources
+
+The agent searches **65 sources across 7 categories**:
+
+| Category | Sources |
+|----------|---------|
+| **Major Tech News** | TechCrunch, The Verge, Wired, Ars Technica, CNET, Engadget, Gizmodo + more |
+| **Business & Finance** | CNBC, Bloomberg, Reuters, Forbes, WSJ, Financial Times + more |
+| **AI-Specific** | VentureBeat AI, MIT Tech Review, The Batch, The Decoder, Synced Review + more |
+| **Official Blogs** | OpenAI, Google DeepMind, Anthropic, Meta AI, Microsoft, Hugging Face, NVIDIA + more |
+| **Developer & OSS** | Hacker News top 50, GitHub Trending, Dev.to, Stack Overflow, ProductHunt + more |
+| **Reddit** | r/artificial, r/MachineLearning, r/OpenAI, r/LocalLLaMA, r/singularity + more |
+| **Newsletters** | TLDR AI, The Rundown AI, Ben's Bites, Stratechery, SemiAnalysis + more |
 
 ---
 
 ## 💰 Cost Breakdown
 
-| Service | Free Tier | Monthly Usage |
-|---------|-----------|--------------|
-| GitHub Actions | 2,000 min/month | ~30 min/month |
-| Gemini API | 1M tokens/day | ~50K tokens/day |
-| Google Sheets | Unlimited | Minimal |
-| Make.com | 1,000 ops/month | ~30 ops/month |
-| **Total** | **Free** | **₹0** |
+| Service | Plan | Monthly Usage | Cost |
+|---------|------|--------------|------|
+| GitHub Actions | Free | ~150 mins/month | ₹0 |
+| Gemini API | Free / Pro | 3 API calls per run | ₹0 |
+| Make.com | Free | ~50 ops/month | ₹0 |
+| **Total** | | | **₹0/month** |
 
 ---
 
-## 🤝 Contributing
+## 🛠️ Efficiency — Batch API Mode
 
-This is a personal brand automation tool. Customise the prompts in `prompts/` to match your voice and niche.
+The content agent generates posts for **all 5 stories in a single Gemini API call**:
+
+| Mode | API Calls Per Run |
+|------|------------------|
+| Old (per-story) | 7 calls (1 research + 1 filter + 5 content) |
+| **New (batch)** | **3 calls (1 research + 1 filter + 1 batch content)** |
+
+This means you can run the agent **6x per day** on the free Gemini tier before hitting limits — or virtually unlimited times with a Pro account.
 
 ---
 
-*Built with ❤️ using Google Gemini 2.0 Flash*
+## 🤝 Customisation
+
+All prompts are fully customisable in the `prompts/` folder:
+- Change **writing style** → edit `content_prompt_batch.txt`
+- Change **topics** → edit `research_prompt.txt`
+- Change **scoring criteria** → edit `filter_prompt.txt`
+
+---
+
+*Built with ❤️ using Google Gemini 2.5 Flash · Make.com · GitHub Actions*
