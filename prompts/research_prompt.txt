@@ -63,4 +63,4 @@ Each item must follow this exact schema:
   }
 ]
 
-Find at least 70-80 distinct news items. Cast an extremely wide net across ALL the sources listed above. Cover a broad range of categories — do not limit to just the top headlines. Include niche stories, product launches, funding rounds, research papers, developer tools, policy news, and community discussions. Each story must be unique (no duplicates). Today's date is: {TODAY}.
+Find at least 100-120 distinct news items. Cast an extremely wide net across ALL the sources listed above. Cover a broad range of categories — do not limit to just the top headlines. Include niche stories, product launches, funding rounds, research papers, developer tools, policy news, and community discussions. Dig deep into each source — not just the homepage headlines but also trending/popular sections. Each story must be unique (no duplicates). Today's date is: {TODAY}.
