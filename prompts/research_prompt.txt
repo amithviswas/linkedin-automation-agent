@@ -36,7 +36,14 @@ Search across these domains:
 - Future of work and automation impact
 
 ## Research Sources
-Search Hacker News, TechCrunch, The Verge, Wired, ProductHunt, official company blogs, GitHub Trending, Reddit (r/artificial, r/technology, r/MachineLearning), and AI newsletters.
+Search extensively across ALL of these sources:
+- **News**: TechCrunch, The Verge, Wired, Ars Technica, CNBC Tech, Reuters Tech, Bloomberg Tech, BBC Tech, Forbes Tech, Business Insider Tech
+- **AI-specific**: VentureBeat AI, MIT Tech Review, Towards Data Science, The Batch (deeplearning.ai), Import AI, The AI Times, Synced Review
+- **Communities**: Hacker News (top 50 posts), Reddit (r/artificial, r/technology, r/MachineLearning, r/OpenAI, r/LocalLLaMA, r/singularity)
+- **Product launches**: ProductHunt (top of the day), GitHub Trending, BetaList
+- **Official blogs**: OpenAI, Google DeepMind, Anthropic, Meta AI, Microsoft, Hugging Face, Mistral, Cohere
+- **Indian Tech**: YourStory, Inc42, Economic Times Tech, Entrackr, NDTV Gadgets
+- **Newsletters**: TLDR AI, The Rundown AI, Ben's Bites, AI Breakfast, Stratechery
 
 ## Output Format
 
@@ -56,4 +63,4 @@ Each item must follow this exact schema:
   }
 ]
 
-Find at least 15-20 distinct news items. Cast a wide net. Today's date is: {TODAY}.
+Find at least 70-80 distinct news items. Cast an extremely wide net across ALL the sources listed above. Cover a broad range of categories — do not limit to just the top headlines. Include niche stories, product launches, funding rounds, research papers, developer tools, policy news, and community discussions. Each story must be unique (no duplicates). Today's date is: {TODAY}.

@@ -2,7 +2,7 @@
 agents/research_agent.py
 ─────────────────────────
 Uses Gemini 2.0 Flash with Google Search grounding to fetch today's top
-tech & AI news from across the web. Returns a structured list of news items.
+tech & AI news from across the web — 70+ stories. Returns a structured list of news items.
 """
 
 import json
@@ -71,9 +71,9 @@ def run(dry_run: bool = False) -> list[dict[str, Any]]:
     Run the research agent.
 
     Returns:
-        List of raw news item dicts (15–20 items).
+        List of raw news item dicts (70-80 items).
     """
-    log_step("RESEARCH AGENT", f"Fetching today's top tech & AI news ({today_str()})")
+    log_step("RESEARCH AGENT", f"Fetching today's top tech & AI news — 70+ stories ({today_str()})")
 
     if dry_run:
         log_warning("DRY RUN — returning mock research data")
