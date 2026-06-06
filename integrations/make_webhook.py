@@ -22,6 +22,49 @@ from utils.logger import log_step, log_success, log_warning, logger
 # Timeout for webhook calls
 _TIMEOUT = 30.0
 
+# ── Known hallucinated/fake topics to block ───────────────────────────────────
+# These are things that do NOT exist yet. If Gemini hallucinates them,
+# we catch and block the post before it goes to LinkedIn.
+_HALLUCINATION_BLOCKLIST = [
+    "gpt-6", "gpt-7", "gpt-8",
+    "gemini 4", "gemini 5",
+    "claude 4", "claude 5",
+    "grok 4", "grok 5",
+]
+
+
+def _verify_url(url: str) -> bool:
+    """
+    Check that a URL actually exists and returns a valid HTTP response.
+    Returns True if URL is reachable, False if broken/fake.
+    """
+    if not url or not url.startswith("http"):
+        return False
+    try:
+        # Try HEAD first (faster, no body download)
+        response = httpx.head(url, timeout=10.0, follow_redirects=True,
+                              headers={"User-Agent": "Mozilla/5.0"})
+        if response.status_code < 400:
+            return True
+        # HEAD blocked by server — try GET
+        response = httpx.get(url, timeout=10.0, follow_redirects=True,
+                             headers={"User-Agent": "Mozilla/5.0"})
+        return response.status_code < 400
+    except Exception:
+        return False
+
+
+def _contains_hallucination(post_content: str) -> str | None:
+    """
+    Check if post content contains known hallucinated/fake topics.
+    Returns the matched phrase if found, None if content looks real.
+    """
+    content_lower = post_content.lower()
+    for phrase in _HALLUCINATION_BLOCKLIST:
+        if phrase in content_lower:
+            return phrase
+    return None
+
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=3, max=15))
 def _post_to_webhook(payload: dict) -> httpx.Response:
@@ -42,6 +85,10 @@ def trigger_post(
 ) -> bool:
     """
     Send the top-ranked post to Make.com for LinkedIn publishing.
+
+    Includes two safety checks before posting:
+    1. Hallucination blocker — blocks posts about topics that don't exist yet
+    2. URL verifier — confirms the source URL is real and reachable
 
     Args:
         content: The #1 ranked content dict (from content_agent.run()[0])
@@ -93,6 +140,28 @@ def trigger_post(
     if not MAKE_WEBHOOK_URL:
         log_warning("MAKE_WEBHOOK_URL not set — skipping webhook trigger")
         return False
+
+    # ── SAFETY CHECK 1: Block known hallucinated content ──────────────────────
+    hallucination = _contains_hallucination(payload["post_content"])
+    if hallucination:
+        raise RuntimeError(
+            f"🚨 BLOCKED: Post contains likely hallucinated content ('{hallucination}'). "
+            f"This topic does not exist yet. Pipeline stopped to protect your LinkedIn credibility."
+        )
+
+    # ── SAFETY CHECK 2: Verify source URL actually exists ─────────────────────
+    source_url = payload.get("source_url", "")
+    if source_url:
+        logger.info(f"  Verifying source URL: {source_url}")
+        if not _verify_url(source_url):
+            raise RuntimeError(
+                f"🚨 BLOCKED: Source URL is broken or unreachable: {source_url}\n"
+                f"This likely means the story was hallucinated by Gemini without real grounding. "
+                f"Pipeline stopped to prevent posting fake news to LinkedIn."
+            )
+        log_success(f"  Source URL verified ✓ {source_url}")
+    else:
+        log_warning("  No source URL provided — skipping URL verification")
 
     try:
         response = _post_to_webhook(payload)

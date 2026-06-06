@@ -78,9 +78,11 @@ def _call_gemini_with_search(prompt: str) -> str:
 def run(dry_run: bool = False) -> list[dict[str, Any]]:
     """
     Run the research agent.
+    IMPORTANT: Only uses Google Search grounding — never falls back to
+    ungrounded generation, which would produce hallucinated fake news.
 
     Returns:
-        List of raw news item dicts (70-80 items).
+        List of raw news item dicts (150+ items) sourced from real web search.
     """
     log_step("RESEARCH AGENT", f"Fetching today's global tech & AI news — 150+ stories from 65 sources ({today_str()})")
 
@@ -90,51 +92,27 @@ def run(dry_run: bool = False) -> list[dict[str, Any]]:
 
     prompt = _load_prompt()
 
-    try:
-        raw_response = _call_gemini_with_search(prompt)
-        logger.debug(f"Raw research response (first 500 chars):\n{raw_response[:500]}")
-    except Exception as e:
-        log_warning(f"Google Search grounding failed ({e}). Retrying without grounding...")
-        raw_response = _call_gemini_without_grounding(prompt)
+    # ── ONLY use Google Search grounding — NEVER fall back to ungrounded ──────
+    # Without grounding, Gemini hallucinates fake news stories and broken URLs.
+    # It is safer to fail the pipeline than to post misinformation to LinkedIn.
+    raw_response = _call_gemini_with_search(prompt)
+    logger.debug(f"Raw research response (first 500 chars):\n{raw_response[:500]}")
 
     try:
         news_items = extract_json(raw_response)
         if not isinstance(news_items, list):
             raise ValueError("Expected a JSON array from research agent")
-        log_success(f"Research complete — {len(news_items)} stories found")
+        log_success(f"Research complete — {len(news_items)} stories found (all sourced from real web search)")
         return news_items
     except ValueError as e:
         raise RuntimeError(f"Research agent failed to return valid JSON: {e}") from e
 
 
-def _call_gemini_without_grounding(prompt: str) -> str:
-    """Fallback: Call Gemini without search grounding. Also retries on 503."""
-    max_attempts = 7
-    for attempt in range(max_attempts):
-        try:
-            client = genai.Client(api_key=GEMINI_API_KEY)
-            response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-            return response.text
-        except (ClientError, ServerError) as e:
-            err_str = str(e)
-            if "503" in err_str or "UNAVAILABLE" in err_str:
-                wait_secs = 30 + (attempt * 15)
-                logger.warning(
-                    f"Gemini server busy (503, no grounding) — waiting {wait_secs}s then retrying "
-                    f"(attempt {attempt + 1}/{max_attempts})..."
-                )
-                time.sleep(wait_secs)
-            elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                delay_match = re.search(r"retry in ([\d.]+)s", err_str)
-                if delay_match:
-                    wait_secs = float(delay_match.group(1)) + 5
-                    logger.warning(f"Rate limited (fallback) — waiting {wait_secs:.0f}s then retrying...")
-                    time.sleep(wait_secs)
-                else:
-                    raise RuntimeError(f"Daily API quota exhausted. Resets at 5:30 AM IST.") from e
-            else:
-                raise
-    raise RuntimeError(f"Max retries ({max_attempts}) exceeded in research agent (no grounding)")
+# ── REMOVED: _call_gemini_without_grounding ───────────────────────────────────
+# This function was DANGEROUS — without Google Search grounding, Gemini
+# fabricates news stories, non-existent URLs, and fake product announcements.
+# Example: It invented "GPT-6 with autonomous agent mode" and posted it to LinkedIn.
+# The pipeline must STOP if grounding fails, not fall back to hallucination.
 
 
 def _mock_news() -> list[dict]:
