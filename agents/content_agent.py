@@ -19,7 +19,7 @@ from typing import Any
 
 from google import genai
 from google.genai import types as genai_types
-from google.genai.errors import ClientError
+from google.genai.errors import ClientError, ServerError
 
 from config.settings import GEMINI_API_KEY, GEMINI_MODEL
 from utils.helpers import extract_json, today_str
@@ -57,8 +57,8 @@ def _load_single_prompt(story: dict) -> str:
 
 
 def _call_gemini(prompt: str, max_tokens: int = 32000) -> str:
-    """Call Gemini with smart 429 handling — waits and retries up to 5 times."""
-    max_attempts = 5
+    """Call Gemini with smart retry on 429 (rate limit) and 503 (server busy)."""
+    max_attempts = 7
     for attempt in range(max_attempts):
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
@@ -73,9 +73,18 @@ def _call_gemini(prompt: str, max_tokens: int = 32000) -> str:
                 ),
             )
             return response.text
-        except ClientError as e:
+        except (ClientError, ServerError) as e:
             err_str = str(e)
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+            # ── 503 Server Busy — wait and retry ────────────────────────────
+            if "503" in err_str or "UNAVAILABLE" in err_str:
+                wait_secs = 30 + (attempt * 15)  # 30s, 45s, 60s, 75s...
+                logger.warning(
+                    f"Gemini server busy (503) — waiting {wait_secs}s then retrying "
+                    f"(attempt {attempt + 1}/{max_attempts})..."
+                )
+                time.sleep(wait_secs)
+            # ── 429 Rate Limited — wait exact delay from API ─────────────────
+            elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
                 delay_match = re.search(r"retry in ([\d.]+)s", err_str)
                 if delay_match:
                     wait_secs = float(delay_match.group(1)) + 5
