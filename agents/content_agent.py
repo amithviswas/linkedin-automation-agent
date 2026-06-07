@@ -75,11 +75,11 @@ def _call_gemini(prompt: str, max_tokens: int = 32000) -> str:
             return response.text
         except (ClientError, ServerError) as e:
             err_str = str(e)
-            # ── 503 Server Busy — wait and retry ────────────────────────────
-            if "503" in err_str or "UNAVAILABLE" in err_str:
+            # ── 500 Internal / 503 Server Busy — wait and retry ─────────────
+            if "500" in err_str or "INTERNAL" in err_str or "503" in err_str or "UNAVAILABLE" in err_str:
                 wait_secs = 30 + (attempt * 15)  # 30s, 45s, 60s, 75s...
                 logger.warning(
-                    f"Gemini server busy (503) — waiting {wait_secs}s then retrying "
+                    f"Gemini server error ({err_str[:40]}) — waiting {wait_secs}s then retrying "
                     f"(attempt {attempt + 1}/{max_attempts})..."
                 )
                 time.sleep(wait_secs)
