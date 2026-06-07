@@ -36,10 +36,7 @@ def _call_gemini_with_search(prompt: str) -> str:
     max_attempts = 10
     for attempt in range(max_attempts):
         try:
-            client = genai.Client(
-                api_key=GEMINI_API_KEY,
-                http_options=genai_types.HttpOptions(timeout=480),  # 8 min max per attempt
-            )
+            client = genai.Client(api_key=GEMINI_API_KEY)
             response = client.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=prompt,
