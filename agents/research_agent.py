@@ -43,6 +43,8 @@ def _call_gemini_with_search(prompt: str) -> str:
                 config=genai_types.GenerateContentConfig(
                     tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
                 ),
+                # Explicit timeout — fail fast and retry rather than hanging forever
+                http_options=genai_types.HttpOptions(timeout=480),  # 8 minutes max per attempt
             )
             return response.text
         except (ClientError, ServerError) as e:
