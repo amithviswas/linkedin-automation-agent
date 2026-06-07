@@ -36,19 +36,20 @@ def _call_gemini_with_search(prompt: str) -> str:
     max_attempts = 10
     for attempt in range(max_attempts):
         try:
-            client = genai.Client(api_key=GEMINI_API_KEY)
+            client = genai.Client(
+                api_key=GEMINI_API_KEY,
+                http_options=genai_types.HttpOptions(timeout=480),  # 8 min max per attempt
+            )
             response = client.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=prompt,
                 config=genai_types.GenerateContentConfig(
                     tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
                     # Limit to 3 search calls max — reduces API quota usage by 70%
-                    # (default is 10, which burns through free tier quota very fast)
                     automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(
                         maximum_remote_calls=3
                     ),
                 ),
-                http_options=genai_types.HttpOptions(timeout=480),
             )
             return response.text
         except (ClientError, ServerError) as e:
