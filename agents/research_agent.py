@@ -33,7 +33,7 @@ def _call_gemini_with_search(prompt: str) -> str:
     Call Gemini with Google Search grounding enabled.
     Retries on both 429 (rate limit) and 503 (server busy) errors.
     """
-    max_attempts = 7
+    max_attempts = 10
     for attempt in range(max_attempts):
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
@@ -42,9 +42,13 @@ def _call_gemini_with_search(prompt: str) -> str:
                 contents=prompt,
                 config=genai_types.GenerateContentConfig(
                     tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+                    # Limit to 3 search calls max — reduces API quota usage by 70%
+                    # (default is 10, which burns through free tier quota very fast)
+                    automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(
+                        maximum_remote_calls=3
+                    ),
                 ),
-                # Explicit timeout — fail fast and retry rather than hanging forever
-                http_options=genai_types.HttpOptions(timeout=480),  # 8 minutes max per attempt
+                http_options=genai_types.HttpOptions(timeout=480),
             )
             return response.text
         except (ClientError, ServerError) as e:
@@ -62,16 +66,14 @@ def _call_gemini_with_search(prompt: str) -> str:
                 delay_match = re.search(r"retry in ([\d.]+)s", err_str)
                 if delay_match:
                     wait_secs = float(delay_match.group(1)) + 5
-                    logger.warning(
-                        f"Rate limited (research) — waiting {wait_secs:.0f}s then retrying "
-                        f"(attempt {attempt + 1}/{max_attempts})..."
-                    )
-                    time.sleep(wait_secs)
                 else:
-                    raise RuntimeError(
-                        f"Daily API quota exhausted for model '{GEMINI_MODEL}'. "
-                        f"Quota resets at midnight UTC (5:30 AM IST)."
-                    ) from e
+                    # No specific delay given — use exponential backoff
+                    wait_secs = min(60 * (attempt + 1), 300)  # 60s, 120s, 180s... max 5 mins
+                logger.warning(
+                    f"Rate limited (research) — waiting {wait_secs:.0f}s then retrying "
+                    f"(attempt {attempt + 1}/{max_attempts})..."
+                )
+                time.sleep(wait_secs)
             else:
                 raise
     raise RuntimeError(f"Max retries ({max_attempts}) exceeded in research agent (with grounding)")
