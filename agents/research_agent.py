@@ -42,10 +42,6 @@ def _call_gemini_with_search(prompt: str) -> str:
                 contents=prompt,
                 config=genai_types.GenerateContentConfig(
                     tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-                    # Limit to 3 search calls max — reduces API quota usage by 70%
-                    automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(
-                        maximum_remote_calls=3
-                    ),
                 ),
             )
             return response.text
