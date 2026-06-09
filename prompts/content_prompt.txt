@@ -24,24 +24,36 @@ Your task: Transform a news story into THREE high-performing LinkedIn content fo
 Structure:
 Line 1: 🔥 Powerful hook headline — curiosity, shock, or strong opinion (emoji optional but effective)
 [blank line]
-Lines 2-7: Core insight — 5-6 short punchy sentences. Each line = one idea.
+Paragraph 1 — WHAT HAPPENED (3-4 sentences):
+Explain the news clearly. Who did what, when, and how. Use plain language. No jargon. Make it feel like you're telling a friend.
 [blank line]
-Lines 8-9: Personal opinion angle — "Here's what this means for you..." or contrarian take
+Paragraph 2 — WHY IT MATTERS (3-4 sentences):
+Zoom out. What does this change? Who does it affect? Use a stat, comparison, or real-world analogy to make the impact visceral and tangible.
 [blank line]
-Line 10: Engagement CTA — a direct question to the reader
+Paragraph 3 — DEEPER CONTEXT / BACKSTORY (3-4 sentences):
+Add colour. What led to this? What's the bigger trend? Connect this story to something your reader already knows — make them feel smarter for reading this.
 [blank line]
-Line 11: Save/share CTA
+Paragraph 4 — REAL-WORLD EXAMPLE OR USE CASE (3-4 sentences):
+Give a concrete example. "Imagine you are a developer / founder / creator..." Show exactly how this plays out in someone's day-to-day life or work.
 [blank line]
-Line 12: 📖 Read more: [use the url from the story input — this is MANDATORY]
+Paragraph 5 — MY TAKE / OPINION (2-3 sentences):
+Strong personal opinion or contrarian take. Don't just describe — have a point of view. "Here's the thing nobody is talking about..." or "Most people will miss this, but..."
 [blank line]
-Lines 13-14: 7-10 relevant hashtags
+Line: Engagement CTA — a direct, specific question to spark comments
+[blank line]
+Line: Save/share CTA
+[blank line]
+Line: 📖 Read more: [use the url from the story input — this is MANDATORY]
+[blank line]
+Lines: 7-10 relevant hashtags
 
 Rules:
-- Total post length: 1200–1800 characters (sweet spot for LinkedIn reach)
-- First 3 lines must be gripping (visible before "see more" cut)
-- No bullet points — flowing narrative style
-- ALWAYS include the source URL at the end as "📖 Read more: <url>" — this gives readers a place to learn more
-- End with 3-5 niche hashtags + 2-3 broad hashtags
+- Total post length: 2500–3000 characters (long-form does better on LinkedIn for thought leadership)
+- First 2-3 lines must be gripping (visible before "see more" cut) — the hook is everything
+- Write in flowing paragraphs — no bullet points in the main body
+- Each paragraph must flow naturally into the next — use transitions
+- ALWAYS include the source URL at the end as "📖 Read more: <url>" — this is non-negotiable
+- End with 5-8 niche hashtags + 2-3 broad hashtags
 
 ---
 
@@ -108,8 +120,8 @@ Return ONLY a valid JSON object. No explanation, no markdown, no preamble.
   "story_title": "...",
   "source_url": "<url from the input story — include as-is>",
   "text_post": {
-    "content": "Full LinkedIn post text exactly as it should be published. Include emojis, line breaks (use \\n), the '📖 Read more: <url>' line before hashtags, and hashtags at the end.",
-    "char_count": 1450,
+    "content": "Full LinkedIn post text exactly as it should be published. Must be 2500-3000 characters. Include 5 paragraphs (What Happened, Why It Matters, Deeper Context, Real-World Example, My Take), emojis, line breaks (use \\n), the '📖 Read more: <url>' line before hashtags, and hashtags at the end.",
+    "char_count": 2700,
     "hook": "First line of the post",
     "hashtags": ["#AITools", "#Tech", ...]
   },
