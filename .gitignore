@@ -33,3 +33,7 @@ Thumbs.db
 
 # Logs
 *.log
+scheduler_log.txt
+
+# Temp/debug scripts
+test_*.py

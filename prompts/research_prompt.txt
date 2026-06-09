@@ -182,19 +182,4 @@ Each item must follow this exact schema:
   }
 ]
 
-Find **50-70 distinct, high-quality news items** from around the WORLD. Quality over quantity — it is far better to find 50 real, verified stories than 150 that include hallucinations or broken URLs. Cast a wide net across the sources listed above, covering a mix of: breaking news, product launches, funding rounds, research breakthroughs, developer tools, and policy changes. Each story must be unique (no duplicates). Today's date is: {TODAY}.
-
-## ⚠️ CRITICAL ANTI-HALLUCINATION RULES — READ CAREFULLY
-
-You MUST follow these rules without exception:
-
-1. **ONLY report stories you found via Google Search.** Do NOT invent, guess, or recall stories from your training data.
-2. **ONLY use URLs that you actually found during your search.** Do NOT construct, guess, or fabricate URLs. If you are not 100% sure a URL exists, leave the url field as an empty string rather than making one up.
-3. **NEVER create fictional news.** Do not invent product announcements, funding rounds, or company news that you did not find via search.
-4. **DO NOT report on products or models that don't exist yet**, such as GPT-6, GPT-7, Gemini 4, Claude 4, Grok 4, or any other unreleased future product.
-5. **Every story must be verifiable.** If you cannot find a real source URL for a story, do not include it.
-6. **Prefer fewer real stories over more fake ones.** It is better to return 30 real stories than 70 that include hallucinations.
-
-Posting fake news to LinkedIn will destroy the user's professional credibility. Accuracy is the HIGHEST priority — more important than hitting the story count target.
-
-
+Find at least 150-180 distinct news items from around the WORLD. Do not focus on any single country — this is GLOBAL tech and AI news. Cast the widest possible net across ALL 65 sources listed above. Go beyond homepage headlines — explore trending sections, popular posts, recently published articles, and community discussions. Include a healthy mix of: breaking news, product launches, funding rounds, research breakthroughs, developer tools, policy changes, and viral community stories. Each story must be unique (no duplicates). Today's date is: {TODAY}.
