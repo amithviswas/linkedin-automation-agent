@@ -182,4 +182,4 @@ Each item must follow this exact schema:
   }
 ]
 
-Find at least 150-180 distinct news items from around the WORLD. Do not focus on any single country — this is GLOBAL tech and AI news. Cast the widest possible net across ALL 65 sources listed above. Go beyond homepage headlines — explore trending sections, popular posts, recently published articles, and community discussions. Include a healthy mix of: breaking news, product launches, funding rounds, research breakthroughs, developer tools, policy changes, and viral community stories. Each story must be unique (no duplicates). Today's date is: {TODAY}.
+Find at least 40-50 distinct news items from around the WORLD. Focus on QUALITY over quantity — pick the most important, surprising, and viral stories across all categories. Do not focus on any single country — this is GLOBAL tech and AI news. Cover a healthy mix of: breaking news, product launches, funding rounds, research breakthroughs, developer tools, and viral community stories. Each story must be unique (no duplicates). Today's date is: {TODAY}.
