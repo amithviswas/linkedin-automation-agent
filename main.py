@@ -18,6 +18,7 @@ Usage:
 
 import argparse
 import sys
+import time
 import traceback
 
 # ── Windows UTF-8 fix (emoji support in terminal) ────────────────────────────
@@ -125,12 +126,22 @@ def run_pipeline(dry_run: bool = False, story_count: int = None) -> bool:
         news_items = research_agent.run(dry_run=dry_run)
         console.print(f"[dim]  Found {len(news_items)} stories[/dim]")
 
+        # ── Cool-down: let the rate limit window reset before next API call ──
+        if not dry_run:
+            console.print("[dim]  ⏳ Cooling down 90s before filtering (rate limit safety)...[/dim]")
+            time.sleep(90)
+
         # ── Step 2: Filter ───────────────────────────────────────────────────
         filtered_stories = filtering_agent.run(
             news_items,
             top_n=story_count,
             dry_run=dry_run,
         )
+
+        # ── Cool-down: let the rate limit window reset before content gen ────
+        if not dry_run:
+            console.print("[dim]  ⏳ Cooling down 90s before content generation (rate limit safety)...[/dim]")
+            time.sleep(90)
 
         # ── Step 3: Generate Content ─────────────────────────────────────────
         generated_content = content_agent.run(filtered_stories, dry_run=dry_run)

@@ -58,7 +58,8 @@ def _load_single_prompt(story: dict) -> str:
 
 def _call_gemini(prompt: str, max_tokens: int = 32000) -> str:
     """Call Gemini with smart retry on 429 (rate limit) and 503 (server busy)."""
-    max_attempts = 7
+    max_attempts = 5
+    consecutive_429 = 0
     for attempt in range(max_attempts):
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
@@ -77,6 +78,7 @@ def _call_gemini(prompt: str, max_tokens: int = 32000) -> str:
             err_str = str(e)
             # ── 503 Server Busy — wait and retry ────────────────────────────
             if "503" in err_str or "UNAVAILABLE" in err_str:
+                consecutive_429 = 0  # reset counter
                 wait_secs = 30 + (attempt * 15)  # 30s, 45s, 60s, 75s...
                 logger.warning(
                     f"Gemini server busy (503) — waiting {wait_secs}s then retrying "
@@ -85,6 +87,7 @@ def _call_gemini(prompt: str, max_tokens: int = 32000) -> str:
                 time.sleep(wait_secs)
             # ── 429 Rate Limited — wait exact delay from API ─────────────────
             elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                consecutive_429 += 1
                 delay_match = re.search(r"retry in ([\d.]+)s", err_str)
                 if delay_match:
                     wait_secs = float(delay_match.group(1)) + 5
@@ -93,14 +96,19 @@ def _call_gemini(prompt: str, max_tokens: int = 32000) -> str:
                         f"(attempt {attempt + 1}/{max_attempts})..."
                     )
                     time.sleep(wait_secs)
-                else:
+                elif consecutive_429 >= 2:
+                    # Two consecutive 429s with no retry hint = daily quota exhausted
                     raise RuntimeError(
                         f"Daily API quota exhausted for model '{GEMINI_MODEL}'. "
-                        f"Quota resets at midnight UTC (5:30 AM IST)."
+                        f"Quota resets at midnight UTC (5:30 AM IST). Try again after 5:30 AM IST."
                     ) from e
+                else:
+                    logger.warning(f"Rate limited (no delay hint) — waiting 60s then retrying (attempt {attempt + 1}/{max_attempts})...")
+                    time.sleep(60)
             else:
                 raise
     raise RuntimeError(f"Max retries ({max_attempts}) exceeded on Gemini API call")
+
 
 
 def run(
