@@ -183,17 +183,26 @@ def run(
         # ── Fallback: generate per-story (uses more API calls) ───────────────
         logger.warning(
             f"Batch generation failed ({batch_error}). "
-            f"Falling back to per-story generation..."
+            f"Cooling down 3 min then falling back to per-story generation..."
         )
+        # Wait 3 minutes so the rate-limit window fully resets after batch retries
+        if True:  # always cool-down in non-dry-run (dry_run already returned above)
+            time.sleep(180)
         return _run_per_story(filtered_stories)
 
 
 def _run_per_story(filtered_stories: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Fallback: generate content story-by-story (uses more API calls)."""
+    """Fallback: generate content story-by-story with 2-min gaps between requests."""
     results = []
-    for story in filtered_stories:
+    for idx, story in enumerate(filtered_stories):
         title = story.get("title", "Unknown")
         story_id = story.get("id", 0)
+
+        # Wait 2 minutes before each story (except the first) so rate limit resets
+        if idx > 0:
+            logger.info(f"  ⏳ Waiting 2 min before next story (rate limit gap)...")
+            time.sleep(120)
+
         logger.info(f"  Generating content for story #{story_id}: {title[:60]}...")
 
         prompt = _load_single_prompt(story)
