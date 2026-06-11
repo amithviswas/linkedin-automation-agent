@@ -153,8 +153,16 @@ def run(
         for i, story in enumerate(filtered_stories):
             if i < len(batch_results):
                 content = batch_results[i]
+                # Safety: unwrap if a list was nested inside the batch
+                if isinstance(content, list) and len(content) > 0:
+                    content = content[0]
             else:
                 logger.warning(f"  Missing content for story #{i+1}, using mock")
+                content = _mock_content(story)
+
+            # Safety check — ensure it's a dict
+            if not isinstance(content, dict):
+                logger.warning(f"  Unexpected batch content type {type(content)} for story #{i+1} — using mock")
                 content = _mock_content(story)
 
             content["_meta"] = {
@@ -192,9 +200,19 @@ def _run_per_story(filtered_stories: list[dict[str, Any]]) -> list[dict[str, Any
         try:
             raw_response = _call_gemini(prompt, max_tokens=8192)
             content = extract_json(raw_response)
+            # The single-story prompt returns a JSON array [{...}] — unwrap it
+            if isinstance(content, list) and len(content) > 0:
+                content = content[0]
+            elif isinstance(content, list):
+                raise ValueError("Empty list returned by content agent")
             log_success(f"  ✓ Content generated for: {title[:60]}")
         except Exception as e:
             logger.warning(f"  ✗ Failed for '{title}': {e} — using mock")
+            content = _mock_content(story)
+
+        # Safety check — ensure content is a dict before attaching meta
+        if not isinstance(content, dict):
+            logger.warning(f"  Unexpected content type {type(content)} — using mock")
             content = _mock_content(story)
 
         content["_meta"] = {
