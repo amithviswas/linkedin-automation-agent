@@ -31,10 +31,13 @@ def _load_prompt() -> str:
 def _call_gemini_with_search(prompt: str) -> str:
     """
     Call Gemini with Google Search grounding enabled.
-    Retries on both 429 (rate limit) and 503 (server busy) errors.
+    Retries on 503 (server busy) and limited 429s, but bails fast if quota exhausted.
+    Total time budget: 4 minutes max (to avoid burning 8 min on dead quota).
     """
     max_attempts = 5
     consecutive_429 = 0
+    total_waited = 0
+    MAX_WAIT_BUDGET = 240  # 4 minutes total — if still failing, quota is dead
     for attempt in range(max_attempts):
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
@@ -51,33 +54,40 @@ def _call_gemini_with_search(prompt: str) -> str:
             # ── 503 Server Busy — wait and retry ────────────────────────────
             if "503" in err_str or "UNAVAILABLE" in err_str:
                 consecutive_429 = 0  # reset counter
-                wait_secs = 30 + (attempt * 15)  # 30s, 45s, 60s, 75s...
+                wait_secs = 30 + (attempt * 15)  # 30s, 45s, 60s...
                 logger.warning(
                     f"Gemini server busy (503) — waiting {wait_secs}s then retrying "
                     f"(attempt {attempt + 1}/{max_attempts})..."
                 )
                 time.sleep(wait_secs)
-            # ── 429 Rate Limited — wait exact delay from API ─────────────────
+                total_waited += wait_secs
+            # ── 429 Rate Limited — check time budget first ─────────────────────
             elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
                 consecutive_429 += 1
+                # If we've already waited more than the budget, quota is exhausted
+                if total_waited >= MAX_WAIT_BUDGET:
+                    raise RuntimeError(
+                        f"API quota exhausted for '{GEMINI_MODEL}' — spent {total_waited}s waiting on rate limits. "
+                        f"Quota resets at midnight UTC (5:30 AM IST)."
+                    ) from e
                 delay_match = re.search(r"retry in ([\d.]+)s", err_str)
                 if delay_match:
-                    wait_secs = float(delay_match.group(1)) + 5
+                    wait_secs = min(float(delay_match.group(1)) + 5, 65)  # cap at 65s
                     logger.warning(
                         f"Rate limited (research) — waiting {wait_secs:.0f}s then retrying "
-                        f"(attempt {attempt + 1}/{max_attempts})..."
+                        f"(attempt {attempt + 1}/{max_attempts}, spent {total_waited}s/{MAX_WAIT_BUDGET}s budget)..."
                     )
                     time.sleep(wait_secs)
+                    total_waited += wait_secs
                 elif consecutive_429 >= 2:
-                    # Two consecutive 429s with no retry hint = daily quota exhausted
                     raise RuntimeError(
                         f"Daily API quota exhausted for model '{GEMINI_MODEL}'. "
                         f"Quota resets at midnight UTC (5:30 AM IST). Try again after 5:30 AM IST."
                     ) from e
                 else:
-                    # First 429 with no delay hint — wait 60s and try once more
                     logger.warning(f"Rate limited (no delay hint) — waiting 60s then retrying (attempt {attempt + 1}/{max_attempts})...")
                     time.sleep(60)
+                    total_waited += 60
             else:
                 raise
     raise RuntimeError(f"Max retries ({max_attempts}) exceeded in research agent (with grounding)")
@@ -118,10 +128,12 @@ def run(dry_run: bool = False) -> list[dict[str, Any]]:
 def _call_gemini_without_grounding(prompt: str) -> str:
     """
     Fallback: Call Gemini without search grounding.
-    Only 3 attempts (grounded already tried 5x — no point burning more retries).
-    Bails immediately on daily quota exhaustion.
+    Only 3 attempts with a 2-minute total time budget.
+    Bails immediately when budget is spent or quota confirmed exhausted.
     """
     max_attempts = 3
+    total_waited = 0
+    MAX_WAIT_BUDGET = 120  # 2 minutes — if still failing, quota is dead
     for attempt in range(max_attempts):
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
@@ -136,21 +148,29 @@ def _call_gemini_without_grounding(prompt: str) -> str:
                     f"(attempt {attempt + 1}/{max_attempts})..."
                 )
                 time.sleep(wait_secs)
+                total_waited += wait_secs
             elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                # Check budget first
+                if total_waited >= MAX_WAIT_BUDGET:
+                    raise RuntimeError(
+                        f"API quota exhausted for '{GEMINI_MODEL}' — spent {total_waited}s waiting on rate limits. "
+                        f"Resets at midnight UTC (5:30 AM IST). Please try again tomorrow after 5:30 AM IST."
+                    ) from e
                 delay_match = re.search(r"retry in ([\d.]+)s", err_str)
                 if delay_match:
-                    wait_secs = float(delay_match.group(1)) + 5
-                    logger.warning(f"Rate limited (fallback) — waiting {wait_secs:.0f}s then retrying (attempt {attempt + 1}/{max_attempts})...")
+                    wait_secs = min(float(delay_match.group(1)) + 5, 65)
+                    logger.warning(f"Rate limited (fallback) — waiting {wait_secs:.0f}s then retrying (attempt {attempt + 1}/{max_attempts}, budget {total_waited}s/{MAX_WAIT_BUDGET}s)...")
                     time.sleep(wait_secs)
+                    total_waited += wait_secs
                 else:
-                    # No retry delay hint = daily quota truly exhausted — bail immediately
+                    # No retry hint = quota truly exhausted — bail immediately
                     raise RuntimeError(
                         f"Daily API quota exhausted for '{GEMINI_MODEL}'. "
-                        f"Resets at midnight UTC (5:30 AM IST). Please try again later."
+                        f"Resets at midnight UTC (5:30 AM IST). Please try again tomorrow after 5:30 AM IST."
                     ) from e
             else:
                 raise
-    raise RuntimeError(f"Max retries ({max_attempts}) exceeded in research agent fallback. Try again in a few minutes.")
+    raise RuntimeError(f"API quota exhausted — all {max_attempts} fallback attempts failed. Please try again after 5:30 AM IST tomorrow.")
 
 
 def _mock_news() -> list[dict]:
