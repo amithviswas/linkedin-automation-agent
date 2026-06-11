@@ -33,7 +33,7 @@ def _optional(key: str, default: str = "") -> str:
 
 # ── Gemini ──────────────────────────────────────────────────────────────────
 GEMINI_API_KEY: str = _optional("GEMINI_API_KEY")
-GEMINI_MODEL: str = _optional("GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_MODEL: str = _optional("GEMINI_MODEL", "gemini-2.0-flash")
 
 # ── Google Sheets ────────────────────────────────────────────────────────────
 GOOGLE_SHEETS_CREDS_RAW: str = _optional("GOOGLE_SHEETS_CREDS")
