@@ -44,7 +44,7 @@ def print_banner():
     console.print(
         Panel.fit(
             "[bold cyan]LinkedIn Automation Agent[/bold cyan]\n"
-            "[dim]Powered by Gemini 2.0 Flash + Google Search[/dim]",
+            "[dim]Powered by RSS Feeds + Gemini 2.0 Flash[/dim]",
             border_style="cyan",
             padding=(1, 4),
         )
@@ -132,11 +132,6 @@ def run_pipeline(dry_run: bool = False, story_count: int = None) -> bool:
             top_n=story_count,
             dry_run=dry_run,
         )
-
-        # ── Cool-down: let the rate limit window reset before content gen ────
-        if not dry_run:
-            console.print("[dim]  ⏳ Cooling down 60s before content generation (rate limit safety)...[/dim]")
-            time.sleep(60)
 
         # ── Step 3: Generate Content ─────────────────────────────────────────
         generated_content = content_agent.run(filtered_stories, dry_run=dry_run)
