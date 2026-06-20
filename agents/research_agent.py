@@ -1,176 +1,194 @@
 """
 agents/research_agent.py
 ─────────────────────────
-Uses Gemini 2.0 Flash with Google Search grounding to fetch today's top
-tech & AI news from across the web — 70+ stories. Returns a structured list of news items.
+Fetches today's global tech & AI news directly from RSS feeds —
+no Gemini API calls, no rate limits, always reliable.
+
+Sources: TechCrunch, The Verge, Ars Technica, Wired, VentureBeat,
+         MIT Technology Review, HuggingFace, Google AI, OpenAI, Anthropic,
+         GitHub Blog, DeepMind, Microsoft AI, India startups + more.
 """
 
-import json
+import concurrent.futures
 import re
-import time
-from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from google import genai
-from google.genai import types as genai_types
-from google.genai.errors import ClientError, ServerError
+import feedparser
+import httpx
 
-from config.settings import GEMINI_API_KEY, GEMINI_MODEL
-from utils.helpers import extract_json, today_str
+from utils.helpers import today_str
 from utils.logger import log_step, log_success, log_warning, logger
 
-# ── Setup ────────────────────────────────────────────────────────────────────
-_PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "research_prompt.txt"
+# ── RSS Sources ───────────────────────────────────────────────────────────────
+# (name, url, category)
+RSS_FEEDS: list[tuple[str, str, str]] = [
+    # ── AI Research & Labs ─────────────────────────────────────────────────
+    ("OpenAI Blog",         "https://openai.com/blog/rss.xml",                      "AI Research"),
+    ("Google AI Blog",      "https://blog.google/technology/ai/rss/",               "AI Research"),
+    ("Anthropic Blog",      "https://www.anthropic.com/blog/rss.xml",               "AI Research"),
+    ("DeepMind Blog",       "https://deepmind.google/blog/rss.xml",                 "AI Research"),
+    ("HuggingFace Blog",    "https://huggingface.co/blog/feed.xml",                 "AI Research"),
+    ("Meta AI Blog",        "https://ai.meta.com/blog/feed/",                       "AI Research"),
+    ("Microsoft AI Blog",   "https://blogs.microsoft.com/ai/feed/",                 "AI Research"),
+    ("Mistral AI Blog",     "https://mistral.ai/feed",                              "AI Research"),
+    # ── Tech News ─────────────────────────────────────────────────────────
+    ("TechCrunch",          "https://techcrunch.com/feed/",                         "Tech News"),
+    ("The Verge",           "https://www.theverge.com/rss/index.xml",               "Tech News"),
+    ("Ars Technica",        "https://feeds.arstechnica.com/arstechnica/index",      "Tech News"),
+    ("Wired",               "https://www.wired.com/feed/rss",                       "Tech News"),
+    ("Engadget",            "https://www.engadget.com/rss.xml",                     "Tech News"),
+    ("ZDNet",               "https://www.zdnet.com/news/rss.xml",                   "Tech News"),
+    ("The Register",        "https://www.theregister.com/headlines.atom",           "Tech News"),
+    ("9to5Google",          "https://9to5google.com/feed/",                         "Tech News"),
+    # ── AI & Startup News ─────────────────────────────────────────────────
+    ("VentureBeat AI",      "https://venturebeat.com/category/ai/feed/",            "AI Tools"),
+    ("VentureBeat",         "https://venturebeat.com/feed/",                        "Startup"),
+    ("TechCrunch AI",       "https://techcrunch.com/category/artificial-intelligence/feed/", "AI Tools"),
+    ("AI News",             "https://www.artificialintelligence-news.com/feed/",    "AI Tools"),
+    ("Unite.AI",            "https://www.unite.ai/feed/",                           "AI Tools"),
+    # ── Developer & Dev Tools ─────────────────────────────────────────────
+    ("GitHub Blog",         "https://github.blog/feed/",                            "Developer"),
+    ("Stack Overflow Blog", "https://stackoverflow.blog/feed/",                     "Developer"),
+    ("Dev.to",              "https://dev.to/feed",                                  "Developer"),
+    ("Hacker News Best",    "https://hnrss.org/best",                               "Developer"),
+    # ── Business & Startups ───────────────────────────────────────────────
+    ("Fast Company Tech",   "https://www.fastcompany.com/technology/rss",           "Business"),
+    ("MIT Technology Review","https://www.technologyreview.com/feed/",              "Research"),
+    ("Harvard Business Review","https://feeds.hbr.org/harvardbusiness",            "Business"),
+    # ── India & Global Startups ───────────────────────────────────────────
+    ("YourStory",           "https://yourstory.com/feed",                           "India Tech"),
+    ("Inc42",               "https://inc42.com/feed/",                              "India Tech"),
+    ("Economic Times Tech", "https://economictimes.indiatimes.com/tech/rssfeeds/13357270.cms", "India Tech"),
+    ("NDTV Gadgets",        "https://gadgets.ndtv.com/rss/feeds",                   "India Tech"),
+]
+
+# ── How far back to look for news ─────────────────────────────────────────────
+_MAX_AGE_HOURS = 48  # Include stories up to 48 hours old
+_MAX_PER_FEED = 5    # Max stories per feed to avoid flooding from one source
+_FETCH_TIMEOUT = 10  # HTTP timeout per feed in seconds
 
 
-def _load_prompt() -> str:
-    template = _PROMPT_PATH.read_text(encoding="utf-8")
-    return template.replace("{TODAY}", today_str())
+def _parse_date(entry: dict) -> datetime | None:
+    """Extract and parse the publication datetime from a feed entry."""
+    for key in ("published_parsed", "updated_parsed", "created_parsed"):
+        val = entry.get(key)
+        if val:
+            try:
+                return datetime(*val[:6], tzinfo=timezone.utc)
+            except Exception:
+                pass
+    return None
 
 
-def _call_gemini_with_search(prompt: str) -> str:
-    """
-    Call Gemini with Google Search grounding enabled.
-    Retries on 503 (server busy) and limited 429s, but bails fast if quota exhausted.
-    Total time budget: 4 minutes max (to avoid burning 8 min on dead quota).
-    """
-    max_attempts = 5
-    consecutive_429 = 0
-    total_waited = 0
-    MAX_WAIT_BUDGET = 240  # 4 minutes total — if still failing, quota is dead
-    for attempt in range(max_attempts):
+def _clean_html(text: str) -> str:
+    """Strip HTML tags from a string."""
+    return re.sub(r"<[^>]+>", "", text or "").strip()
+
+
+def _fetch_feed(source_name: str, url: str, category: str, cutoff: datetime) -> list[dict]:
+    """Fetch and parse a single RSS feed. Returns list of story dicts."""
+    stories = []
+    try:
+        # Use httpx for the HTTP request (handles redirects, timeouts better)
+        resp = httpx.get(url, timeout=_FETCH_TIMEOUT, follow_redirects=True,
+                         headers={"User-Agent": "Mozilla/5.0 (compatible; LinkedInBot/1.0)"})
+        resp.raise_for_status()
+        feed = feedparser.parse(resp.text)
+    except Exception:
+        # Fallback: let feedparser handle it directly
         try:
-            client = genai.Client(api_key=GEMINI_API_KEY)
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt,
-                config=genai_types.GenerateContentConfig(
-                    tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-                ),
-            )
-            return response.text
-        except (ClientError, ServerError) as e:
-            err_str = str(e)
-            # ── 503 Server Busy — wait and retry ────────────────────────────
-            if "503" in err_str or "UNAVAILABLE" in err_str:
-                consecutive_429 = 0  # reset counter
-                wait_secs = 30 + (attempt * 15)  # 30s, 45s, 60s...
-                logger.warning(
-                    f"Gemini server busy (503) — waiting {wait_secs}s then retrying "
-                    f"(attempt {attempt + 1}/{max_attempts})..."
-                )
-                time.sleep(wait_secs)
-                total_waited += wait_secs
-            # ── 429 Rate Limited — check time budget first ─────────────────────
-            elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                consecutive_429 += 1
-                # If we've already waited more than the budget, quota is exhausted
-                if total_waited >= MAX_WAIT_BUDGET:
-                    raise RuntimeError(
-                        f"API quota exhausted for '{GEMINI_MODEL}' — spent {total_waited}s waiting on rate limits. "
-                        f"Quota resets at midnight UTC (5:30 AM IST)."
-                    ) from e
-                delay_match = re.search(r"retry in ([\d.]+)s", err_str)
-                if delay_match:
-                    wait_secs = min(float(delay_match.group(1)) + 5, 65)  # cap at 65s
-                    logger.warning(
-                        f"Rate limited (research) — waiting {wait_secs:.0f}s then retrying "
-                        f"(attempt {attempt + 1}/{max_attempts}, spent {total_waited}s/{MAX_WAIT_BUDGET}s budget)..."
-                    )
-                    time.sleep(wait_secs)
-                    total_waited += wait_secs
-                elif consecutive_429 >= 2:
-                    raise RuntimeError(
-                        f"Daily API quota exhausted for model '{GEMINI_MODEL}'. "
-                        f"Quota resets at midnight UTC (5:30 AM IST). Try again after 5:30 AM IST."
-                    ) from e
-                else:
-                    logger.warning(f"Rate limited (no delay hint) — waiting 60s then retrying (attempt {attempt + 1}/{max_attempts})...")
-                    time.sleep(60)
-                    total_waited += 60
-            else:
-                raise
-    raise RuntimeError(f"Max retries ({max_attempts}) exceeded in research agent (with grounding)")
+            feed = feedparser.parse(url)
+        except Exception as e:
+            logger.warning(f"  RSS fetch failed for {source_name}: {e}")
+            return []
+
+    for entry in feed.entries[:_MAX_PER_FEED]:
+        title = _clean_html(entry.get("title", "")).strip()
+        if not title or len(title) < 10:
+            continue
+
+        # Filter by date
+        pub_dt = _parse_date(entry)
+        if pub_dt and pub_dt < cutoff:
+            continue  # Too old
+
+        summary = _clean_html(
+            entry.get("summary", "") or entry.get("description", "") or ""
+        )[:600]
+
+        url_link = entry.get("link", "")
+
+        stories.append({
+            "id": None,  # Will be assigned after collection
+            "title": title,
+            "summary": summary or f"Read the full story at {source_name}.",
+            "source": source_name,
+            "url": url_link,
+            "category": category,
+            "published_date": pub_dt.strftime("%Y-%m-%d") if pub_dt else today_str(),
+            "key_facts": [],
+        })
+
+    return stories
+
+
+def _fetch_all_feeds() -> list[dict[str, Any]]:
+    """
+    Fetch all RSS feeds concurrently and return deduplicated story list.
+    Uses ThreadPoolExecutor for parallel HTTP requests.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=_MAX_AGE_HOURS)
+    all_stories: list[dict] = []
+    seen_titles: set[str] = set()
+
+    log_step("RESEARCH AGENT", f"Fetching RSS feeds from {len(RSS_FEEDS)} sources concurrently...")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
+        futures = {
+            executor.submit(_fetch_feed, name, url, cat, cutoff): name
+            for name, url, cat in RSS_FEEDS
+        }
+        for future in concurrent.futures.as_completed(futures):
+            source = futures[future]
+            try:
+                stories = future.result()
+                for s in stories:
+                    # Deduplicate by title (case-insensitive, ignore punctuation)
+                    key = re.sub(r"[^a-z0-9]", "", s["title"].lower())[:60]
+                    if key not in seen_titles:
+                        seen_titles.add(key)
+                        all_stories.append(s)
+            except Exception as e:
+                logger.warning(f"  Feed error ({source}): {e}")
+
+    # Assign sequential IDs
+    for i, story in enumerate(all_stories, 1):
+        story["id"] = i
+
+    return all_stories
 
 
 def run(dry_run: bool = False) -> list[dict[str, Any]]:
     """
-    Run the research agent.
+    Run the research agent — fetches latest tech & AI news via RSS feeds.
+    No Gemini API calls. No rate limits. Always works.
 
     Returns:
-        List of raw news item dicts (70-80 items).
+        List of news item dicts (30-80 items depending on feed freshness).
     """
-    log_step("RESEARCH AGENT", f"Fetching today's global tech & AI news — top 40-50 quality stories ({today_str()})")
-
     if dry_run:
         log_warning("DRY RUN — returning mock research data")
         return _mock_news()
 
-    prompt = _load_prompt()
+    stories = _fetch_all_feeds()
 
-    try:
-        raw_response = _call_gemini_with_search(prompt)
-        logger.debug(f"Raw research response (first 500 chars):\n{raw_response[:500]}")
-    except Exception as e:
-        log_warning(f"Google Search grounding failed ({e}). Retrying without grounding...")
-        raw_response = _call_gemini_without_grounding(prompt)
+    if not stories:
+        log_warning("No stories fetched from RSS feeds — returning mock data as fallback")
+        return _mock_news()
 
-    try:
-        news_items = extract_json(raw_response)
-        if not isinstance(news_items, list):
-            raise ValueError("Expected a JSON array from research agent")
-        log_success(f"Research complete — {len(news_items)} stories found")
-        return news_items
-    except ValueError as e:
-        raise RuntimeError(f"Research agent failed to return valid JSON: {e}") from e
-
-
-def _call_gemini_without_grounding(prompt: str) -> str:
-    """
-    Fallback: Call Gemini without search grounding.
-    Only 3 attempts with a 2-minute total time budget.
-    Bails immediately when budget is spent or quota confirmed exhausted.
-    """
-    max_attempts = 3
-    total_waited = 0
-    MAX_WAIT_BUDGET = 120  # 2 minutes — if still failing, quota is dead
-    for attempt in range(max_attempts):
-        try:
-            client = genai.Client(api_key=GEMINI_API_KEY)
-            response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-            return response.text
-        except (ClientError, ServerError) as e:
-            err_str = str(e)
-            if "503" in err_str or "UNAVAILABLE" in err_str:
-                wait_secs = 30 + (attempt * 20)
-                logger.warning(
-                    f"Gemini server busy (503, no grounding) — waiting {wait_secs}s then retrying "
-                    f"(attempt {attempt + 1}/{max_attempts})..."
-                )
-                time.sleep(wait_secs)
-                total_waited += wait_secs
-            elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                # Check budget first
-                if total_waited >= MAX_WAIT_BUDGET:
-                    raise RuntimeError(
-                        f"API quota exhausted for '{GEMINI_MODEL}' — spent {total_waited}s waiting on rate limits. "
-                        f"Resets at midnight UTC (5:30 AM IST). Please try again tomorrow after 5:30 AM IST."
-                    ) from e
-                delay_match = re.search(r"retry in ([\d.]+)s", err_str)
-                if delay_match:
-                    wait_secs = min(float(delay_match.group(1)) + 5, 65)
-                    logger.warning(f"Rate limited (fallback) — waiting {wait_secs:.0f}s then retrying (attempt {attempt + 1}/{max_attempts}, budget {total_waited}s/{MAX_WAIT_BUDGET}s)...")
-                    time.sleep(wait_secs)
-                    total_waited += wait_secs
-                else:
-                    # No retry hint = quota truly exhausted — bail immediately
-                    raise RuntimeError(
-                        f"Daily API quota exhausted for '{GEMINI_MODEL}'. "
-                        f"Resets at midnight UTC (5:30 AM IST). Please try again tomorrow after 5:30 AM IST."
-                    ) from e
-            else:
-                raise
-    raise RuntimeError(f"API quota exhausted — all {max_attempts} fallback attempts failed. Please try again after 5:30 AM IST tomorrow.")
+    log_success(f"Research complete — {len(stories)} stories found from RSS feeds (no API calls used)")
+    return stories
 
 
 def _mock_news() -> list[dict]:
@@ -182,7 +200,7 @@ def _mock_news() -> list[dict]:
             "summary": "OpenAI has launched GPT-5, featuring advanced reasoning capabilities that can solve complex multi-step problems in real time. The model shows a 40% improvement over GPT-4o on reasoning benchmarks.",
             "source": "OpenAI Blog",
             "url": "https://openai.com/blog/gpt-5",
-            "category": "AI Model",
+            "category": "AI Research",
             "published_date": today_str(),
             "key_facts": [
                 "40% improvement on reasoning benchmarks",
@@ -194,9 +212,9 @@ def _mock_news() -> list[dict]:
             "id": 2,
             "title": "Google launches Gemini 2.5 Ultra with 2M context window",
             "summary": "Google DeepMind released Gemini 2.5 Ultra with an unprecedented 2 million token context window, enabling processing of entire codebases in a single prompt.",
-            "source": "Google Blog",
+            "source": "Google AI Blog",
             "url": "https://blog.google/gemini-2-5-ultra",
-            "category": "AI Model",
+            "category": "AI Research",
             "published_date": today_str(),
             "key_facts": [
                 "2 million token context window",
@@ -208,9 +226,9 @@ def _mock_news() -> list[dict]:
             "id": 3,
             "title": "Indian startup Sarvam AI raises $41M Series A",
             "summary": "Bangalore-based Sarvam AI secured $41M in Series A funding to build AI models natively for Indian languages. The startup has trained models on 22 Indian languages.",
-            "source": "TechCrunch",
-            "url": "https://techcrunch.com/sarvam-ai-41m",
-            "category": "Indian Tech",
+            "source": "YourStory",
+            "url": "https://yourstory.com/sarvam-ai-41m",
+            "category": "India Tech",
             "published_date": today_str(),
             "key_facts": [
                 "$41M Series A",
@@ -236,8 +254,8 @@ def _mock_news() -> list[dict]:
             "id": 5,
             "title": "ElevenLabs launches real-time voice cloning API",
             "summary": "ElevenLabs released a new API allowing developers to clone any voice in under 3 seconds with just 10 seconds of audio sample, with built-in consent verification.",
-            "source": "ElevenLabs Blog",
-            "url": "https://elevenlabs.io/api-launch",
+            "source": "VentureBeat AI",
+            "url": "https://venturebeat.com/elevenlabs-api-launch",
             "category": "AI Tools",
             "published_date": today_str(),
             "key_facts": [

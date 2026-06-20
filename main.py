@@ -122,14 +122,9 @@ def run_pipeline(dry_run: bool = False, story_count: int = None) -> bool:
         console.print("[yellow bold]⚡ DRY RUN MODE — No external writes will occur[/yellow bold]\n")
 
     try:
-        # ── Step 1: Research ─────────────────────────────────────────────────
+        # ── Step 1: Research (RSS feeds — no API calls) ──────────────────────
         news_items = research_agent.run(dry_run=dry_run)
-        console.print(f"[dim]  Found {len(news_items)} stories[/dim]")
-
-        # ── Cool-down: let the rate limit window reset before next API call ──
-        if not dry_run:
-            console.print("[dim]  ⏳ Cooling down 90s before filtering (rate limit safety)...[/dim]")
-            time.sleep(90)
+        console.print(f"[dim]  Found {len(news_items)} stories from RSS feeds[/dim]")
 
         # ── Step 2: Filter ───────────────────────────────────────────────────
         filtered_stories = filtering_agent.run(
@@ -140,8 +135,8 @@ def run_pipeline(dry_run: bool = False, story_count: int = None) -> bool:
 
         # ── Cool-down: let the rate limit window reset before content gen ────
         if not dry_run:
-            console.print("[dim]  ⏳ Cooling down 90s before content generation (rate limit safety)...[/dim]")
-            time.sleep(90)
+            console.print("[dim]  ⏳ Cooling down 60s before content generation (rate limit safety)...[/dim]")
+            time.sleep(60)
 
         # ── Step 3: Generate Content ─────────────────────────────────────────
         generated_content = content_agent.run(filtered_stories, dry_run=dry_run)
