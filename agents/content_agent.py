@@ -131,11 +131,18 @@ def run(
         log_warning("DRY RUN — returning mock content")
         return [_mock_content(s) for s in filtered_stories]
 
+    # ── Warm-up: wait 3 min before calling Gemini ────────────────────────────
+    # Research + filtering are now instant (zero API). Gemini may still be in a
+    # rate-limited window from a previous scheduled run. This pause clears it.
+    logger.info("  ⏳ Warming up 3 min before Gemini content call (rate-limit safety)...")
+    time.sleep(180)
+
     # ── Try batch generation first (1 API call for all stories) ─────────────
     try:
         prompt = _load_batch_prompt(filtered_stories)
         raw_response = _call_gemini(prompt, max_tokens=32000)
         logger.debug(f"Raw batch content response (first 500 chars):\n{raw_response[:500]}")
+
 
         batch_results = extract_json(raw_response)
 
@@ -240,9 +247,11 @@ def _run_per_story(filtered_stories: list[dict[str, Any]]) -> list[dict[str, Any
 
 
 def _mock_content(story: dict) -> dict:
-    """Return mock content for dry-run testing."""
+    """Return mock content for dry-run/fallback. Marked with _is_mock=True so
+    main.py can detect and SKIP posting it to LinkedIn."""
     title = story.get("title", "Mock Story")
     return {
+        "_is_mock": True,   # <-- blocker flag: do NOT post to LinkedIn
         "story_id": story.get("id", 1),
         "story_title": title,
         "text_post": {

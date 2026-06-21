@@ -157,7 +157,14 @@ def run_pipeline(dry_run: bool = False, story_count: int = None) -> bool:
         # ── Step 5: Trigger Make.com for Today's Post (Rank #1) ──────────────
         if generated_content:
             top_post = generated_content[0]
-            if MAKE_WEBHOOK_URL:
+
+            # Guard: never post mock/fallback content to LinkedIn
+            if top_post.get("_is_mock"):
+                log_warning(
+                    "⚠ Content generation fell back to mock — skipping LinkedIn post. "
+                    "Gemini API was rate-limited. Posts saved locally for reference."
+                )
+            elif MAKE_WEBHOOK_URL:
                 make_webhook.trigger_post(top_post, dry_run=dry_run)
             else:
                 log_warning("MAKE_WEBHOOK_URL not configured — skipping auto-post. Add it to .env to enable LinkedIn publishing.")
@@ -169,6 +176,7 @@ def run_pipeline(dry_run: bool = False, story_count: int = None) -> bool:
                     border_style="cyan",
                     title=f"[bold]Rank #1 — {top_post.get('_meta', {}).get('story_title', '')[:50]}[/bold]",
                 ))
+
 
         # ── Done ─────────────────────────────────────────────────────────────
         storage_note = f"📁 posts_output/{today_str()}/" if (USE_LOCAL_STORAGE or not GOOGLE_SHEET_ID) else "📊 Google Sheets"
