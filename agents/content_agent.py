@@ -30,24 +30,21 @@ _BATCH_PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "content_prompt_
 _SINGLE_PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "content_prompt.txt"
 
 
-def _load_batch_prompt(stories: list[dict]) -> str:
-    """Load the batch prompt and inject all stories as JSON."""
+def _load_batch_prompt(story: dict) -> str:
+    """Load the prompt and inject a single story as JSON."""
     template = _BATCH_PROMPT_PATH.read_text(encoding="utf-8")
-    slim_stories = [
-        {
-            "id": s.get("id"),
-            "title": s.get("title", ""),
-            "summary": s.get("summary", ""),
-            "source": s.get("source", ""),
-            "url": s.get("url", ""),
-            "category": s.get("category", ""),
-            "key_facts": s.get("key_facts", []),
-            "why_selected": s.get("why_selected", ""),
-            "composite_score": s.get("composite_score", 0),
-        }
-        for s in stories
-    ]
-    return template.replace("{STORIES_JSON}", json.dumps(slim_stories, indent=2, ensure_ascii=False))
+    slim_story = {
+        "id": story.get("id"),
+        "title": story.get("title", ""),
+        "summary": story.get("summary", ""),
+        "source": story.get("source", ""),
+        "url": story.get("url", ""),
+        "category": story.get("category", ""),
+        "key_facts": story.get("key_facts", []),
+        "why_selected": story.get("why_selected", ""),
+        "composite_score": story.get("composite_score", 0),
+    }
+    return template.replace("{STORIES_JSON}", json.dumps(slim_story, indent=2, ensure_ascii=False))
 
 
 def _load_single_prompt(story: dict) -> str:
@@ -137,43 +134,48 @@ def run(
     logger.info("  ⏳ Warming up 3 min before Gemini content call (rate-limit safety)...")
     time.sleep(180)
 
-    # ── Try batch generation first (1 API call for all stories) ─────────────
+    # ── Only generate content for the TOP story (the one Make.com will post) ──
+    # Generating all 5 stories = 15x more tokens. We only post story #1 anyway.
+    top_story = filtered_stories[0]
+
+    # ── Try single-story generation (lean prompt, ~4k tokens output) ────────
     try:
-        prompt = _load_batch_prompt(filtered_stories)
-        raw_response = _call_gemini(prompt, max_tokens=32000)
-        logger.debug(f"Raw batch content response (first 500 chars):\n{raw_response[:500]}")
+        prompt = _load_batch_prompt(top_story)
+        raw_response = _call_gemini(prompt, max_tokens=4096)
+        logger.debug(f"Raw content response (first 500 chars):\n{raw_response[:500]}")
 
 
         batch_results = extract_json(raw_response)
 
-        if not isinstance(batch_results, list):
-            raise ValueError("Batch content agent returned a non-array JSON response")
+        # Unwrap list if needed — prompt returns [{...}]
+        if isinstance(batch_results, list) and len(batch_results) > 0:
+            content = batch_results[0]
+        elif isinstance(batch_results, dict):
+            content = batch_results
+        else:
+            raise ValueError("Content agent returned empty or invalid JSON")
 
-        if len(batch_results) < len(filtered_stories):
-            logger.warning(
-                f"Batch returned {len(batch_results)}/{len(filtered_stories)} stories — "
-                f"will use mock for missing ones"
-            )
+        # Safety: ensure content is a dict
+        if not isinstance(content, dict):
+            raise ValueError(f"Unexpected content type: {type(content)}")
 
-        # Attach metadata to each result
-        results = []
-        for i, story in enumerate(filtered_stories):
-            if i < len(batch_results):
-                content = batch_results[i]
-                # Safety: unwrap if a list was nested inside the batch
-                if isinstance(content, list) and len(content) > 0:
-                    content = content[0]
-            else:
-                logger.warning(f"  Missing content for story #{i+1}, using mock")
-                content = _mock_content(story)
+        # Attach metadata and fill in the remaining stories as mock
+        content["_meta"] = {
+            "rank": top_story.get("rank", 1),
+            "story_title": top_story.get("title", ""),
+            "source": top_story.get("source", ""),
+            "url": top_story.get("url", ""),
+            "category": top_story.get("category", ""),
+            "composite_score": top_story.get("composite_score", 0),
+            "generated_date": today_str(),
+        }
 
-            # Safety check — ensure it's a dict
-            if not isinstance(content, dict):
-                logger.warning(f"  Unexpected batch content type {type(content)} for story #{i+1} — using mock")
-                content = _mock_content(story)
-
-            content["_meta"] = {
-                "rank": story.get("rank", i + 1),
+        # Build full results list: real content for #1, mock for rest (not posted)
+        results = [content]
+        for story in filtered_stories[1:]:
+            mock = _mock_content(story)
+            mock["_meta"] = {
+                "rank": story.get("rank", 0),
                 "story_title": story.get("title", ""),
                 "source": story.get("source", ""),
                 "url": story.get("url", ""),
@@ -181,21 +183,19 @@ def run(
                 "composite_score": story.get("composite_score", 0),
                 "generated_date": today_str(),
             }
-            results.append(content)
+            results.append(mock)
 
-        log_success(f"Batch content generation complete — {len(results)} posts ready (1 API call)")
+        log_success(f"Content generation complete — top story ready (1 API call)")
         return results
 
     except Exception as batch_error:
-        # ── Fallback: generate per-story (uses more API calls) ───────────────
+        # ── Fallback: return mock for all (don't retry — already spent 5 retries + 3min wait) ──
         logger.warning(
-            f"Batch generation failed ({batch_error}). "
-            f"Cooling down 3 min then falling back to per-story generation..."
+            f"Content generation failed ({batch_error}). "
+            f"Using mock content — Make.com webhook will be SKIPPED (no fake posts)."
         )
-        # Wait 3 minutes so the rate-limit window fully resets after batch retries
-        if True:  # always cool-down in non-dry-run (dry_run already returned above)
-            time.sleep(180)
-        return _run_per_story(filtered_stories)
+        return [_mock_content(s) for s in filtered_stories]
+
 
 
 def _run_per_story(filtered_stories: list[dict[str, Any]]) -> list[dict[str, Any]]:
