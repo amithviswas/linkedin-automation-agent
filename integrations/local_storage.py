@@ -19,6 +19,14 @@ from utils.helpers import today_str
 from utils.logger import log_step, log_success, logger
 
 
+def _safe_filename(name: str) -> str:
+    """Strip characters invalid on NTFS / GitHub Actions artifact paths."""
+    invalid = r'":<>|*?\r\n'
+    for ch in invalid:
+        name = name.replace(ch, "_")
+    return name.strip("_ ")
+
+
 def save_posts(generated_content: list[dict[str, Any]]) -> Path:
     """
     Save all generated content to local files.
@@ -39,23 +47,27 @@ def save_posts(generated_content: list[dict[str, Any]]) -> Path:
     # 2. Individual post text files + carousel scripts
     summary_lines = [f"# LinkedIn Posts — {today_str()}\n\n"]
 
-    for content in generated_content:
+    for idx, content in enumerate(generated_content, 1):
         meta = content.get("_meta", {})
-        rank = meta.get("rank", "?")
+        # Use rank from meta; fall back to loop index (never "?" — invalid filename char)
+        rank = meta.get("rank") or idx
         title = meta.get("story_title", "Unknown")
         text_post = content.get("text_post", {})
         carousel = content.get("carousel", {})
         short_take = content.get("short_take", {})
 
+        # Sanitized rank string for filenames
+        rank_str = _safe_filename(str(rank))
+
         # ── Text Post ──────────────────────────────────────────────────────
         post_text = text_post.get("content", "")
-        post_path = output_dir / f"post_{rank}_text.txt"
+        post_path = output_dir / f"post_{rank_str}_text.txt"
         post_path.write_text(post_text, encoding="utf-8")
 
         # ── Carousel Script ────────────────────────────────────────────────
         carousel_lines = [f"CAROUSEL SCRIPT — {title}\n{'='*60}\n\n"]
         for slide in carousel.get("slides", []):
-            num = slide.get("slide_number", "?")
+            num = slide.get("slide_number", idx)
             s_type = slide.get("type", "").upper()
             carousel_lines.append(f"SLIDE {num} — {s_type}\n{'-'*40}")
             if "headline" in slide:
@@ -71,11 +83,11 @@ def save_posts(generated_content: list[dict[str, Any]]) -> Path:
             carousel_lines.append("")
 
         carousel_lines.append(f"\nCAPTION:\n{carousel.get('caption', '')}")
-        carousel_path = output_dir / f"post_{rank}_carousel.txt"
+        carousel_path = output_dir / f"post_{rank_str}_carousel.txt"
         carousel_path.write_text("\n".join(carousel_lines), encoding="utf-8")
 
         # ── Short Take ─────────────────────────────────────────────────────
-        short_path = output_dir / f"post_{rank}_short.txt"
+        short_path = output_dir / f"post_{rank_str}_short.txt"
         short_path.write_text(
             f"{short_take.get('line1', '')}\n{short_take.get('line2', '')}",
             encoding="utf-8",
@@ -86,7 +98,7 @@ def save_posts(generated_content: list[dict[str, Any]]) -> Path:
         summary_lines.append(f"**Source:** {meta.get('source', '')} | **Score:** {meta.get('composite_score', '')}\n")
         summary_lines.append(f"**Hook:** {text_post.get('hook', '')}\n")
         summary_lines.append(f"**Hashtags:** {' '.join(text_post.get('hashtags', []))}\n")
-        summary_lines.append(f"**Files:** `post_{rank}_text.txt` | `post_{rank}_carousel.txt` | `post_{rank}_short.txt`\n")
+        summary_lines.append(f"**Files:** `post_{rank_str}_text.txt` | `post_{rank_str}_carousel.txt` | `post_{rank_str}_short.txt`\n")
         summary_lines.append("---\n")
 
     summary_path = output_dir / "summary.md"
