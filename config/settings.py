@@ -31,9 +31,13 @@ def _optional(key: str, default: str = "") -> str:
     return os.getenv(key, default)
 
 
-# ── Gemini ──────────────────────────────────────────────────────────────────
+# ── Gemini (fallback) ────────────────────────────────────────────────────────
 GEMINI_API_KEY: str = _optional("GEMINI_API_KEY")
 GEMINI_MODEL: str = _optional("GEMINI_MODEL", "gemini-2.0-flash")
+
+# ── Groq (primary content engine — free, fast, reliable from GitHub Actions) ──
+GROQ_API_KEY: str = _optional("GROQ_API_KEY")
+GROQ_MODEL: str = _optional("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 # ── Google Sheets ────────────────────────────────────────────────────────────
 GOOGLE_SHEETS_CREDS_RAW: str = _optional("GOOGLE_SHEETS_CREDS")

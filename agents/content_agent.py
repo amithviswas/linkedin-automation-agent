@@ -1,14 +1,11 @@
 """
 agents/content_agent.py
 ────────────────────────
-For the top N filtered stories, calls Gemini ONCE (batch) to generate three
-LinkedIn content formats per story:
-  1. Text Post  (full LinkedIn post with hook, insight, CTA, hashtags)
-  2. Carousel   (6-slide script with headlines, body, design notes + caption)
-  3. Short Take (2-liner punch)
+Generates LinkedIn content using Groq (primary — free, fast, reliable from
+GitHub Actions) with Gemini as fallback.
 
-This batch approach uses only ONE API call regardless of how many stories
-there are — saving quota and reducing rate-limit risk dramatically.
+Groq uses Llama 3.3 70B — excellent quality for LinkedIn posts, 30 RPM free.
+Gemini 2.0 Flash kept as fallback if GROQ_API_KEY is not set.
 """
 
 import json
@@ -17,11 +14,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from google import genai
-from google.genai import types as genai_types
-from google.genai.errors import ClientError, ServerError
-
-from config.settings import GEMINI_API_KEY, GEMINI_MODEL
+from config.settings import GEMINI_API_KEY, GEMINI_MODEL, GROQ_API_KEY, GROQ_MODEL
 from utils.helpers import extract_json, today_str
 from utils.logger import log_step, log_success, log_warning, logger
 
@@ -53,10 +46,44 @@ def _load_single_prompt(story: dict) -> str:
     return template.replace("{STORY_JSON}", json.dumps(story, indent=2, ensure_ascii=False))
 
 
-def _call_gemini(prompt: str, max_tokens: int = 32000) -> str:
-    """Call Gemini with smart retry on 429 (rate limit) and 503 (server busy)."""
-    max_attempts = 5
-    consecutive_429 = 0
+def _call_groq(prompt: str) -> str:
+    """
+    Call Groq API (primary engine).
+    Free tier: 30 RPM, 14,400 RPD — works reliably from GitHub Actions.
+    Model: llama-3.3-70b-versatile — excellent quality for LinkedIn posts.
+    """
+    from groq import Groq  # lazy import so Gemini-only users don't need groq installed
+    client = Groq(api_key=GROQ_API_KEY)
+
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            response = client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.85,
+                max_tokens=4096,
+                response_format={"type": "json_object"},
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "rate_limit" in err_str.lower():
+                wait = 30 * (attempt + 1)
+                logger.warning(f"Groq rate limited — waiting {wait}s (attempt {attempt+1}/{max_attempts})...")
+                time.sleep(wait)
+            else:
+                raise
+    raise RuntimeError(f"Groq: max retries exceeded")
+
+
+def _call_gemini(prompt: str, max_tokens: int = 4096) -> str:
+    """Fallback: Call Gemini API. Used only when GROQ_API_KEY is not set."""
+    from google import genai
+    from google.genai import types as genai_types
+    from google.genai.errors import ClientError, ServerError
+
+    max_attempts = 3
     for attempt in range(max_attempts):
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
@@ -73,39 +100,30 @@ def _call_gemini(prompt: str, max_tokens: int = 32000) -> str:
             return response.text
         except (ClientError, ServerError) as e:
             err_str = str(e)
-            # ── 503 Server Busy — wait and retry ────────────────────────────
             if "503" in err_str or "UNAVAILABLE" in err_str:
-                consecutive_429 = 0  # reset counter
-                wait_secs = 30 + (attempt * 15)  # 30s, 45s, 60s, 75s...
-                logger.warning(
-                    f"Gemini server busy (503) — waiting {wait_secs}s then retrying "
-                    f"(attempt {attempt + 1}/{max_attempts})..."
-                )
+                wait_secs = 30 + (attempt * 15)
+                logger.warning(f"Gemini server busy — waiting {wait_secs}s (attempt {attempt+1}/{max_attempts})...")
                 time.sleep(wait_secs)
-            # ── 429 Rate Limited — wait exact delay from API ─────────────────
             elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                consecutive_429 += 1
                 delay_match = re.search(r"retry in ([\d.]+)s", err_str)
-                if delay_match:
-                    wait_secs = float(delay_match.group(1)) + 5
-                    logger.warning(
-                        f"Rate limited — waiting {wait_secs:.0f}s then retrying "
-                        f"(attempt {attempt + 1}/{max_attempts})..."
-                    )
-                    time.sleep(wait_secs)
-                elif consecutive_429 >= 2:
-                    # Two consecutive 429s with no retry hint = daily quota exhausted
-                    raise RuntimeError(
-                        f"Daily API quota exhausted for model '{GEMINI_MODEL}'. "
-                        f"Quota resets at midnight UTC (5:30 AM IST). Try again after 5:30 AM IST."
-                    ) from e
-                else:
-                    logger.warning(f"Rate limited (no delay hint) — waiting 60s then retrying (attempt {attempt + 1}/{max_attempts})...")
-                    time.sleep(60)
+                wait_secs = float(delay_match.group(1)) + 5 if delay_match else 60
+                logger.warning(f"Gemini rate limited — waiting {wait_secs:.0f}s (attempt {attempt+1}/{max_attempts})...")
+                time.sleep(wait_secs)
             else:
                 raise
-    raise RuntimeError(f"Max retries ({max_attempts}) exceeded on Gemini API call")
+    raise RuntimeError(f"Gemini: max retries exceeded")
 
+
+def _call_llm(prompt: str) -> str:
+    """Route to Groq (primary) or Gemini (fallback)."""
+    if GROQ_API_KEY:
+        logger.info("  Using Groq (llama-3.3-70b-versatile) for content generation")
+        return _call_groq(prompt)
+    elif GEMINI_API_KEY:
+        logger.warning("  GROQ_API_KEY not set — falling back to Gemini (may be rate limited)")
+        return _call_gemini(prompt)
+    else:
+        raise RuntimeError("No API key configured. Set GROQ_API_KEY (recommended) or GEMINI_API_KEY.")
 
 
 def run(
@@ -122,26 +140,20 @@ def run(
     Returns:
         List of content dicts, one per story, in the same rank order.
     """
-    log_step("CONTENT AGENT", f"Generating 3 content formats for {len(filtered_stories)} stories (batch mode)")
+    log_step("CONTENT AGENT", f"Generating LinkedIn content for top story via {'Groq' if GROQ_API_KEY else 'Gemini'}")
 
     if dry_run:
         log_warning("DRY RUN — returning mock content")
         return [_mock_content(s) for s in filtered_stories]
 
-    # ── Warm-up: wait 3 min before calling Gemini ────────────────────────────
-    # Research + filtering are now instant (zero API). Gemini may still be in a
-    # rate-limited window from a previous scheduled run. This pause clears it.
-    logger.info("  ⏳ Warming up 3 min before Gemini content call (rate-limit safety)...")
-    time.sleep(180)
-
     # ── Only generate content for the TOP story (the one Make.com will post) ──
     # Generating all 5 stories = 15x more tokens. We only post story #1 anyway.
     top_story = filtered_stories[0]
 
-    # ── Try single-story generation (lean prompt, ~4k tokens output) ────────
+    # ── Generate content (Groq primary, Gemini fallback) ─────────────────────
     try:
         prompt = _load_batch_prompt(top_story)
-        raw_response = _call_gemini(prompt, max_tokens=4096)
+        raw_response = _call_llm(prompt)
         logger.debug(f"Raw content response (first 500 chars):\n{raw_response[:500]}")
 
 
