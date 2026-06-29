@@ -158,17 +158,29 @@ def run_pipeline(dry_run: bool = False, story_count: int = None) -> bool:
         if generated_content:
             top_post = generated_content[0]
 
+            # ── Diagnostic: log exactly what's happening ──────────────────────
+            is_mock = top_post.get("_is_mock", False)
+            hook = top_post.get("text_post", {}).get("hook", "(no hook)")
+            content_len = len(top_post.get("text_post", {}).get("content", ""))
+            webhook_configured = bool(MAKE_WEBHOOK_URL)
+            console.print(f"\n[bold]🔍 POST DIAGNOSTIC:[/bold]")
+            console.print(f"  • Is mock content: {is_mock}")
+            console.print(f"  • Content length: {content_len} chars")
+            console.print(f"  • Hook: {hook[:80]}")
+            console.print(f"  • Make.com webhook configured: {webhook_configured}")
+            console.print(f"  • Dry run mode: {dry_run}")
+
             # Guard: never post mock/fallback content to LinkedIn
-            if top_post.get("_is_mock"):
+            if is_mock:
                 log_warning(
                     "⚠ Content generation fell back to mock — skipping LinkedIn post. "
                     "Gemini API was rate-limited. Posts saved locally for reference."
                 )
-            elif MAKE_WEBHOOK_URL:
-                make_webhook.trigger_post(top_post, dry_run=dry_run)
-            else:
-                log_warning("MAKE_WEBHOOK_URL not configured — skipping auto-post. Add it to .env to enable LinkedIn publishing.")
-                # Print the top post to console so user can manually copy-paste
+                # Print post to log so user can see it
+                console.print("\n[bold yellow]📋 MOCK POST (not sent to LinkedIn):[/bold yellow]")
+                console.print(top_post.get("text_post", {}).get("content", "")[:500])
+            elif not webhook_configured:
+                log_warning("MAKE_WEBHOOK_URL not configured — skipping auto-post. Add it to GitHub Secrets to enable LinkedIn publishing.")
                 text_post = top_post.get("text_post", {})
                 console.print("\n[bold cyan]📋 TODAY'S POST (copy this to LinkedIn):[/bold cyan]")
                 console.print(Panel(
@@ -176,7 +188,10 @@ def run_pipeline(dry_run: bool = False, story_count: int = None) -> bool:
                     border_style="cyan",
                     title=f"[bold]Rank #1 — {top_post.get('_meta', {}).get('story_title', '')[:50]}[/bold]",
                 ))
-
+            else:
+                # Real content + webhook configured → fire!
+                console.print(f"\n[bold green]🚀 Triggering Make.com webhook...[/bold green]")
+                make_webhook.trigger_post(top_post, dry_run=dry_run)
 
         # ── Done ─────────────────────────────────────────────────────────────
         storage_note = f"📁 posts_output/{today_str()}/" if (USE_LOCAL_STORAGE or not GOOGLE_SHEET_ID) else "📊 Google Sheets"
