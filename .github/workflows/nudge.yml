@@ -25,10 +25,11 @@ on:
 jobs:
   nudge:
     name: Send Engagement Nudge DMs
-    runs-on: ubuntu-latest
+    # Runs on YOUR machine (trusted LinkedIn IP) — not GitHub's blocked datacenter servers
+    runs-on: self-hosted
     timeout-minutes: 90
     permissions:
-      contents: write   # needed to commit messaged_users.json back to repo
+      contents: write
 
     steps:
       # ── 1. Checkout ────────────────────────────────────────────────────────
@@ -50,9 +51,7 @@ jobs:
 
       # ── 4. Install Playwright + Chromium ───────────────────────────────────
       - name: Install Playwright browsers
-        run: |
-          playwright install chromium
-          playwright install-deps chromium
+        run: python -m playwright install chromium
 
       # ── 5. Run the nudge agent ─────────────────────────────────────────────
       - name: Run Engagement Nudge Agent
