@@ -85,23 +85,35 @@ class LinkedInBrowser:
             headless=self.headless,
             args=[
                 "--no-sandbox",
-                "--disable-blink-features=AutomationControlled",
+                "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-gpu",
+                "--disable-extensions",
+                "--window-size=1280,800",
+                "--start-maximized",
             ],
         )
         self._context = await self._browser.new_context(
             viewport={"width": 1280, "height": 800},
             user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "Mozilla/5.0 (X11; Linux x86_64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/124.0.0.0 Safari/537.36"
             ),
             locale="en-US",
+            timezone_id="Asia/Kolkata",
+            extra_http_headers={
+                "Accept-Language": "en-US,en;q=0.9",
+            },
         )
-        # Hide webdriver flag
-        await self._context.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
+        # Hide webdriver fingerprint
+        await self._context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3]});
+            Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+            window.chrome = { runtime: {} };
+        """)
         self.page = await self._context.new_page()
         return self
 
@@ -115,38 +127,101 @@ class LinkedInBrowser:
 
     async def login(self, email: str, password: str) -> bool:
         """
-        Log into LinkedIn.
+        Log into LinkedIn using explicit waits (no fragile fixed delays).
 
         Returns:
             True on success, raises RuntimeError on failure.
         """
-        log_step("LINKEDIN BROWSER", "Logging into LinkedIn...")
-        await self.page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded")
-        await _human_delay(1.5, 3.0)
+        log_step("LINKEDIN BROWSER", "Navigating to LinkedIn login page...")
 
-        # Fill credentials
-        await _type_like_human(self.page, "#username", email)
-        await _human_delay(0.5, 1.2)
-        await _type_like_human(self.page, "#password", password)
+        # Navigate and wait for network to settle
+        await self.page.goto(
+            "https://www.linkedin.com/login",
+            wait_until="networkidle",
+            timeout=60_000,
+        )
+        await _human_delay(1.0, 2.0)
+
+        # ── Wait for email field (try multiple selectors) ─────────────────────
+        email_selector = None
+        for sel in ["#username", "input[name='session_key']", "input[autocomplete='username']", "input[type='email']"]:
+            try:
+                await self.page.wait_for_selector(sel, timeout=15_000, state="visible")
+                email_selector = sel
+                log_step("LINKEDIN BROWSER", f"Login form found via: {sel}")
+                break
+            except Exception:
+                continue
+
+        if not email_selector:
+            # Save screenshot for debugging
+            await self.page.screenshot(path="/tmp/linkedin_login_debug.png")
+            raise RuntimeError(
+                "Could not find LinkedIn login form after 15s. "
+                "LinkedIn may be showing a CAPTCHA or unusual page. "
+                "Screenshot saved to /tmp/linkedin_login_debug.png"
+            )
+
+        # ── Fill email ────────────────────────────────────────────────────────
+        log_step("LINKEDIN BROWSER", "Filling email...")
+        await self.page.fill(email_selector, "")
+        await _human_delay(0.3, 0.6)
+        await _type_like_human(self.page, email_selector, email)
+        await _human_delay(0.4, 0.9)
+
+        # ── Wait for password field ───────────────────────────────────────────
+        pass_selector = None
+        for sel in ["#password", "input[name='session_password']", "input[type='password']"]:
+            try:
+                await self.page.wait_for_selector(sel, timeout=10_000, state="visible")
+                pass_selector = sel
+                break
+            except Exception:
+                continue
+
+        if not pass_selector:
+            raise RuntimeError("LinkedIn login form has no password field — unexpected page layout.")
+
+        # ── Fill password ─────────────────────────────────────────────────────
+        log_step("LINKEDIN BROWSER", "Filling password...")
+        await self.page.fill(pass_selector, "")
+        await _human_delay(0.3, 0.6)
+        await _type_like_human(self.page, pass_selector, password)
         await _human_delay(0.5, 1.0)
 
-        # Click Sign in
-        await self.page.click('[data-litms-control-urn="login-submit"]')
-        await self.page.wait_for_load_state("domcontentloaded")
-        await _human_delay(2.0, 4.0)
+        # ── Click Sign In ─────────────────────────────────────────────────────
+        log_step("LINKEDIN BROWSER", "Submitting login form...")
+        submit_clicked = False
+        for sel in [
+            "[data-litms-control-urn='login-submit']",
+            "button[type='submit']",
+            ".login__form_action_container button",
+            "button:has-text('Sign in')",
+        ]:
+            try:
+                await self.page.wait_for_selector(sel, timeout=5_000, state="visible")
+                await self.page.click(sel)
+                submit_clicked = True
+                break
+            except Exception:
+                continue
 
-        # Verify login by checking URL
-        current_url = self.page.url
-        if "feed" in current_url or "mynetwork" in current_url or "jobs" in current_url:
-            log_success("LinkedIn login successful")
-            return True
-        elif "checkpoint" in current_url or "challenge" in current_url:
-            raise RuntimeError(
-                "LinkedIn triggered a security challenge (CAPTCHA or 2FA). "
-                "Try logging in manually first to clear the challenge, then re-run."
+        if not submit_clicked:
+            # Fallback: press Enter in the password field
+            await self.page.focus(pass_selector)
+            await self.page.keyboard.press("Enter")
+
+        # ── Wait for post-login redirect ──────────────────────────────────────
+        try:
+            await self.page.wait_for_url(
+                lambda url: any(p in url for p in ["feed", "mynetwork", "jobs", "checkpoint", "challenge"]),
+                timeout=30_000,
             )
-        elif "login" in current_url:
-            raise RuntimeError("LinkedIn login failed — check your email/password in GitHub Secrets.")
+        except Exception:
+            pass  # URL check is best-effort; check below
+
+        await _human_delay(1.5, 3.0)
+        current_url = self.page.url
         else:
             log_success(f"Logged in (URL: {current_url})")
             return True
