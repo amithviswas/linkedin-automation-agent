@@ -222,9 +222,24 @@ class LinkedInBrowser:
 
         await _human_delay(1.5, 3.0)
         current_url = self.page.url
-        else:
-            log_success(f"Logged in (URL: {current_url})")
-            return True
+        log_step("LINKEDIN BROWSER", f"Post-login URL: {current_url}")
+
+        if "checkpoint" in current_url or "challenge" in current_url:
+            await self.page.screenshot(path="/tmp/linkedin_challenge_debug.png")
+            raise RuntimeError(
+                "LinkedIn triggered a security challenge (2FA or CAPTCHA). "
+                "Please log in manually once to clear it, then re-run."
+            )
+        elif "login" in current_url:
+            page_text = (await self.page.content()).lower()
+            if "wrong" in page_text or "incorrect" in page_text or "error" in page_text:
+                raise RuntimeError(
+                    "LinkedIn login failed — wrong email/password. "
+                    "Check your LINKEDIN_EMAIL and LINKEDIN_PASSWORD secrets."
+                )
+
+        log_success(f"LinkedIn login successful (URL: {current_url[:60]})")
+        return True
 
     # ── Get Post Likers ──────────────────────────────────────────────────────
 
