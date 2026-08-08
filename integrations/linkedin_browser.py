@@ -3,22 +3,26 @@ integrations/linkedin_browser.py
 ──────────────────────────────────
 Playwright-based LinkedIn browser automation.
 
-Handles:
-  - Login with email + password
-  - Fetching post likers (scrapes the reactions list on a post)
-  - Fetching 1st-degree connections
-  - Sending a DM to a connection by profile URL
+Auth strategy (in order):
+  1. Cookie restore  — loads LINKEDIN_COOKIES from env var (GitHub Secret).
+                       Set by running save_linkedin_session.py locally once.
+  2. Credential login — fallback for local testing when cookies aren't set.
 
-All actions include realistic human-like delays and random pauses
-to reduce LinkedIn bot-detection risk.
+Why cookies instead of login from GitHub Actions:
+  LinkedIn blocks datacenter IP logins (GitHub Actions uses AWS/Azure IPs).
+  Cookies from a home/work machine are trusted and reusable across sessions.
 
 IMPORTANT: Use conservatively — do NOT send more than 30–50 DMs/day.
 """
 
 import asyncio
+import base64
+import json
+import os
 import random
 import re
 import time
+from pathlib import Path
 from typing import Any
 
 from utils.logger import log_error, log_step, log_success, log_warning
@@ -123,7 +127,65 @@ class LinkedInBrowser:
         if self._playwright:
             await self._playwright.stop()
 
-    # ── Login ────────────────────────────────────────────────────────────────
+    # ── Cookie Restore (primary auth — bypasses datacenter IP block) ──────────
+
+    async def restore_session(self) -> bool:
+        """
+        Restore a previously saved LinkedIn session from the LINKEDIN_COOKIES
+        environment variable (GitHub Secret set by save_linkedin_session.py).
+
+        This bypasses LinkedIn's datacenter IP login block entirely —
+        the cookies were created from a trusted home/work IP and remain valid.
+
+        Returns:
+            True if session restored and LinkedIn feed is accessible.
+            False if cookies are missing, expired, or invalid.
+        """
+        cookies_b64 = os.getenv("LINKEDIN_COOKIES", "")
+        if not cookies_b64:
+            log_warning("LINKEDIN_COOKIES env var not set — will try credential login instead")
+            return False
+
+        log_step("LINKEDIN BROWSER", "Restoring LinkedIn session from saved cookies...")
+
+        try:
+            session_data = json.loads(base64.b64decode(cookies_b64).decode())
+            cookies = session_data.get("cookies", [])
+
+            if not cookies:
+                log_warning("LINKEDIN_COOKIES is set but contains no cookies")
+                return False
+
+            # Inject cookies into the browser context
+            await self._context.add_cookies(cookies)
+            log_step("LINKEDIN BROWSER", f"Injected {len(cookies)} cookies — verifying session...")
+
+            # Navigate to feed to verify the session is still valid
+            await self.page.goto(
+                "https://www.linkedin.com/feed/",
+                wait_until="domcontentloaded",
+                timeout=30_000,
+            )
+            await _human_delay(2.0, 3.5)
+
+            current_url = self.page.url
+            if any(p in current_url for p in ["feed", "mynetwork", "jobs"]):
+                log_success(f"Session restored successfully! (URL: {current_url[:60]})")
+                return True
+            elif "login" in current_url or "authwall" in current_url:
+                log_warning("Session expired or invalid — cookies need to be refreshed")
+                log_warning("Run save_linkedin_session.py locally to generate fresh cookies")
+                return False
+            else:
+                # Some other page — might still be logged in
+                log_success(f"Session appears valid (URL: {current_url[:60]})")
+                return True
+
+        except Exception as e:
+            log_warning(f"Session restore failed: {e} — will try credential login")
+            return False
+
+    # ── Credential Login (fallback for local runs) ────────────────────────────
 
     async def login(self, email: str, password: str) -> bool:
         """

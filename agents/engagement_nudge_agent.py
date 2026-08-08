@@ -124,8 +124,14 @@ async def _run_async(
     # ── Live run — launch Playwright browser ──────────────────────────────────
     async with LinkedInBrowser(headless=headless) as li:
 
-        # Step 1: Login
-        await li.login(email, password)
+        # Step 1: Authenticate
+        # Primary: restore saved cookies (works from datacenter IPs — GitHub Actions)
+        # Fallback: credential login (for local testing without saved cookies)
+        log_step("NUDGE AGENT", "Step 0/3 — Authenticating with LinkedIn")
+        session_restored = await li.restore_session()
+        if not session_restored:
+            log_step("NUDGE AGENT", "Cookie restore failed — trying credential login...")
+            await li.login(email, password)
 
         # Step 2: Fetch likers
         log_step("NUDGE AGENT", "Step 1/3 — Fetching post likers")

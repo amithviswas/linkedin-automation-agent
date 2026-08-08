@@ -43,3 +43,7 @@ test_*.py
 
 # NOTE: data/messaged_users.json is intentionally NOT ignored.
 # It must be committed so GitHub Actions can track who was already messaged.
+
+# LinkedIn session files (contain sensitive cookies — NEVER commit!)
+linkedin_session.json
+linkedin_session_b64.txt
