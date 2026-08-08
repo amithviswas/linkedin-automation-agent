@@ -30,6 +30,10 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: write
+    # Use Git Bash on Windows (self-hosted runner) so bash scripts work correctly
+    defaults:
+      run:
+        shell: bash
 
     steps:
       # ── 1. Checkout ────────────────────────────────────────────────────────
