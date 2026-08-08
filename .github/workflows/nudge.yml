@@ -1,0 +1,120 @@
+name: LinkedIn Engagement Nudge
+
+on:
+  workflow_dispatch:
+    inputs:
+      post_url:
+        description: 'LinkedIn post URL to check'
+        required: true
+        default: 'https://www.linkedin.com/posts/amith-viswas-reddy_accenture-newbeginnings-careerjourney-ugcPost-7491501319430647808-XWvP/'
+      message:
+        description: 'Message to send (use {name} and {post_url} as placeholders)'
+        required: true
+        default: 'please like my post {post_url}'
+      limit:
+        description: 'Max DMs to send this run (safety cap, recommended: 20-30)'
+        required: false
+        default: '30'
+      dry_run:
+        description: 'Dry run — preview without sending any DMs?'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+
+jobs:
+  nudge:
+    name: Send Engagement Nudge DMs
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write   # needed to commit messaged_users.json back to repo
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so we can push the tracker file back
+
+      # ── 2. Python setup ────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # ── 3. Install Python dependencies ─────────────────────────────────────
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      # ── 4. Install Playwright + Chromium ───────────────────────────────────
+      - name: Install Playwright browsers
+        run: |
+          playwright install chromium
+          playwright install-deps chromium
+
+      # ── 5. Run the nudge agent ─────────────────────────────────────────────
+      - name: Run Engagement Nudge Agent
+        env:
+          # LinkedIn credentials — add these in GitHub → Settings → Secrets → Actions
+          LINKEDIN_EMAIL:    ${{ secrets.LINKEDIN_EMAIL }}
+          LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
+
+          # Post config — comes from workflow_dispatch inputs
+          NUDGE_POST_URL: ${{ github.event.inputs.post_url }}
+          NUDGE_MESSAGE:  ${{ github.event.inputs.message }}
+
+          # Other settings
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+
+          # Suppress unneeded services
+          USE_LOCAL_STORAGE: "true"
+          GOOGLE_SHEETS_CREDS: ""
+          GOOGLE_SHEET_ID: ""
+
+        run: |
+          LIMIT_FLAG=""
+          if [ -n "${{ github.event.inputs.limit }}" ] && [ "${{ github.event.inputs.limit }}" != "0" ]; then
+            LIMIT_FLAG="--limit ${{ github.event.inputs.limit }}"
+          fi
+
+          DRY_FLAG=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            DRY_FLAG="--dry-run"
+          fi
+
+          python engagement_nudge.py \
+            --post-url "${{ github.event.inputs.post_url }}" \
+            --message "${{ github.event.inputs.message }}" \
+            $LIMIT_FLAG \
+            $DRY_FLAG
+
+      # ── 6. Commit tracker file back to repo ────────────────────────────────
+      # This ensures the next run knows who was already messaged.
+      - name: Commit messaged_users.json tracker
+        if: github.event.inputs.dry_run != 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Only commit if the tracker file changed
+          if git diff --quiet data/messaged_users.json 2>/dev/null || \
+             git ls-files --others --exclude-standard data/messaged_users.json | grep -q .; then
+            git add data/messaged_users.json
+            git commit -m "chore: update messaged_users tracker [skip ci]"
+            git push
+            echo "✅ Tracker committed to repo"
+          else
+            echo "ℹ️  No changes to tracker file — skipping commit"
+          fi
+
+      # ── 7. Upload run logs as artifact ─────────────────────────────────────
+      - name: Upload run logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nudge-run-${{ github.run_id }}
+          path: |
+            data/messaged_users.json
+          retention-days: 90

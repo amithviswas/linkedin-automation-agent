@@ -55,3 +55,15 @@ TOP_STORIES_COUNT: int = int(_optional("TOP_STORIES_COUNT", "5"))
 # ── Local Storage (fallback when Sheets not configured) ──────────────────────
 USE_LOCAL_STORAGE: bool = _optional("USE_LOCAL_STORAGE", "false").lower() == "true"
 LOCAL_STORAGE_PATH: str = _optional("LOCAL_STORAGE_PATH", "posts_output")
+
+# ── LinkedIn Credentials (for Playwright browser automation) ─────────────────────
+# Store these in GitHub Secrets: LINKEDIN_EMAIL, LINKEDIN_PASSWORD
+# Never commit real credentials to .env in source control!
+LINKEDIN_EMAIL:    str = _optional("LINKEDIN_EMAIL")
+LINKEDIN_PASSWORD: str = _optional("LINKEDIN_PASSWORD")
+
+# ── Engagement Nudge Agent Config ────────────────────────────────────────────────
+# Set via GitHub Actions workflow_dispatch inputs or .env for local runs
+NUDGE_POST_URL: str = _optional("NUDGE_POST_URL")   # LinkedIn post URL to check
+NUDGE_MESSAGE:  str = _optional("NUDGE_MESSAGE",      # Default message template
+    "please like my post {post_url}")
