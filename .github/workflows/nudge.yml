@@ -38,18 +38,15 @@ jobs:
         with:
           fetch-depth: 0   # full history so we can push the tracker file back
 
-      # ── 2. Python setup ────────────────────────────────────────────────────
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
+      # ── 2. Verify Python (already installed on self-hosted runner) ──────────
+      - name: Verify Python
+        run: python --version
 
       # ── 3. Install Python dependencies ─────────────────────────────────────
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      # ── 4. Install Playwright + Chromium ───────────────────────────────────
+      # ── 4. Install Playwright + Chromium (cached after first run) ───────────
       - name: Install Playwright browsers
         run: python -m playwright install chromium
 
