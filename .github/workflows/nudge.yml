@@ -101,23 +101,25 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Only commit if the tracker file changed
-          if git diff --quiet data/messaged_users.json 2>/dev/null || \
-             git ls-files --others --exclude-standard data/messaged_users.json | grep -q .; then
-            git add data/messaged_users.json
+          git add data/messaged_users.json
+
+          # Commit only if the tracker actually changed
+          if git diff --cached --quiet; then
+            echo "ℹ️  No changes to tracker file — no new DMs were sent this run"
+          else
             git commit -m "chore: update messaged_users tracker [skip ci]"
             git push
             echo "✅ Tracker committed to repo"
-          else
-            echo "ℹ️  No changes to tracker file — skipping commit"
           fi
 
-      # ── 7. Upload run logs as artifact ─────────────────────────────────────
-      - name: Upload run logs
+      # ── 7. Upload run logs + screenshots as artifact ──────────────────────────────
+      - name: Upload run logs and debug screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nudge-run-${{ github.run_id }}
           path: |
             data/messaged_users.json
+            /tmp/linkedin_*.png
           retention-days: 90
+          if-no-files-found: ignore

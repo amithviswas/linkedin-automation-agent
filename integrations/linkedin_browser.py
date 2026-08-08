@@ -303,115 +303,149 @@ class LinkedInBrowser:
         log_success(f"LinkedIn login successful (URL: {current_url[:60]})")
         return True
 
-    # ── Get Post Likers ──────────────────────────────────────────────────────
+    # ── Get Post Likers ────────────────────────────────────────────────────────────────────────
 
     async def get_post_likers(self, post_url: str) -> list[dict]:
         """
-        Navigate to a LinkedIn post and scrape the list of people who reacted.
+        Get likers of a LinkedIn post.
 
-        Args:
-            post_url: Full LinkedIn post URL
+        Strategy:
+          1. Navigate to the post page and take a debug screenshot
+          2. Try to click the reactions count to open the modal
+          3. Scrape reactor names + profile links from the modal
 
         Returns:
             List of dicts: [{"name": "...", "profile_url": "...", "headline": "..."}]
         """
-        log_step("LINKEDIN BROWSER", f"Loading post reactions: {post_url[:80]}")
+        log_step("LINKEDIN BROWSER", f"Loading post: {post_url[:80]}")
 
-        # Strip UTM params for a clean URL
         clean_url = post_url.split("?")[0].rstrip("/")
-        await self.page.goto(clean_url, wait_until="domcontentloaded")
-        await _human_delay(2.0, 4.0)
+        await self.page.goto(clean_url, wait_until="networkidle", timeout=60_000)
+        await _human_delay(2.5, 4.0)
         await _scroll_down(self.page, 2)
+
+        # Debug screenshot of the post page
+        await self.page.screenshot(path="/tmp/linkedin_post_page.png", full_page=False)
+        log_step("LINKEDIN BROWSER", f"Post page loaded: {self.page.url[:80]}")
 
         likers = []
 
-        # Click the reactions count button to open the reactions modal
-        try:
-            reactions_btn = await self.page.query_selector(
-                'button[aria-label*="reaction"], '
-                '.social-details-social-counts__reactions-count, '
-                'button.social-details-social-counts__count-value'
-            )
-            if reactions_btn:
-                await reactions_btn.click()
-                await _human_delay(2.0, 3.0)
-            else:
-                # Try clicking the like count text
-                await self.page.click('span.social-details-social-counts__reactions')
-                await _human_delay(2.0, 3.0)
-        except Exception:
-            log_warning("Could not open reactions modal — trying alternative selector")
+        # ── Try clicking the reactions count button (many possible selectors) ───────
+        reaction_selectors = [
+            'button[aria-label*="reaction"]',
+            'button[aria-label*="like"]',
+            '.social-details-social-counts__reactions-count button',
+            '.social-details-social-counts__count-value',
+            'span.social-details-social-counts__reactions-count',
+            'button.social-details-social-counts__count-value',
+            '[data-urn*="activity"] .social-details-social-counts button',
+            '.feed-shared-social-action-bar .social-details-social-counts button',
+            'li.social-details-social-counts__item button',
+        ]
+
+        clicked = False
+        for sel in reaction_selectors:
             try:
-                await self.page.click('[data-urn*="activity"] .social-details-social-counts')
-                await _human_delay(2.0, 3.0)
-            except Exception as e:
-                log_warning(f"Could not open reactions modal: {e}")
-                return []
+                el = await self.page.query_selector(sel)
+                if el and await el.is_visible():
+                    await el.click()
+                    clicked = True
+                    log_step("LINKEDIN BROWSER", f"Clicked reactions via: {sel}")
+                    await _human_delay(2.0, 3.5)
+                    break
+            except Exception:
+                continue
 
-        # Scroll through the reactions modal to load all likers
-        for scroll_attempt in range(10):
-            await _scroll_down(self.page, 1)
-
-            # Scrape visible reactor profiles
-            reactor_cards = await self.page.query_selector_all(
-                '.social-details-reactors-tab__feed-update-reactions-list li, '
-                '.artdeco-list__item'
+        if not clicked:
+            # Screenshot to see what the page actually looks like
+            await self.page.screenshot(path="/tmp/linkedin_post_no_reactions_btn.png")
+            log_warning(
+                "Could not find reactions button. "
+                "Screenshot saved: /tmp/linkedin_post_no_reactions_btn.png"
             )
+            return []
 
-            for card in reactor_cards:
-                try:
-                    # Name
-                    name_el = await card.query_selector(
-                        '.react-button__text, '
-                        'span.t-bold span[aria-hidden="true"], '
-                        '.artdeco-entity-lockup__title span[aria-hidden="true"]'
-                    )
-                    name = (await name_el.inner_text()).strip() if name_el else ""
+        # Debug screenshot of the modal
+        await self.page.screenshot(path="/tmp/linkedin_reactions_modal.png")
 
-                    # Profile link
-                    link_el = await card.query_selector('a[href*="/in/"]')
-                    href = await link_el.get_attribute("href") if link_el else ""
-                    profile_url = ""
-                    if href:
-                        match = re.search(r'(https://www\.linkedin\.com/in/[^/?]+)', href)
-                        if match:
-                            profile_url = match.group(1)
-                        elif href.startswith("/in/"):
-                            profile_url = "https://www.linkedin.com" + href.split("?")[0]
+        # ── Scroll and scrape the reactions modal ──────────────────────────────
+        modal_item_selectors = [
+            '.social-details-reactors-tab__feed-update-reactions-list li',
+            '.artdeco-list .artdeco-list__item',
+            '[class*="reactor"] li',
+            '.scaffold-finite-scroll__content li',
+        ]
 
-                    # Headline
-                    headline_el = await card.query_selector(
-                        '.artdeco-entity-lockup__subtitle span[aria-hidden="true"]'
-                    )
-                    headline = (await headline_el.inner_text()).strip() if headline_el else ""
+        for _ in range(15):  # Up to 15 scroll attempts
+            await _scroll_down(self.page, 1)
+            await _human_delay(0.8, 1.5)
 
-                    if name and profile_url and not any(l["profile_url"] == profile_url for l in likers):
-                        likers.append({"name": name, "profile_url": profile_url, "headline": headline})
-                except Exception:
+            for item_sel in modal_item_selectors:
+                cards = await self.page.query_selector_all(item_sel)
+                if not cards:
                     continue
 
-            # Check if "Load more" button exists
+                for card in cards:
+                    try:
+                        # Name — try multiple selectors
+                        name = ""
+                        for name_sel in [
+                            'span[aria-hidden="true"]',
+                            '.artdeco-entity-lockup__title span',
+                            'span.t-bold span',
+                            'span.t-16',
+                        ]:
+                            name_el = await card.query_selector(name_sel)
+                            if name_el:
+                                name = (await name_el.inner_text()).strip()
+                                if name:
+                                    break
+
+                        # Profile URL
+                        href = ""
+                        link_el = await card.query_selector('a[href*="/in/"]')
+                        if link_el:
+                            href = await link_el.get_attribute("href") or ""
+
+                        profile_url = ""
+                        if href:
+                            match = re.search(r'(https://www\.linkedin\.com/in/[^/?#]+)', href)
+                            if match:
+                                profile_url = match.group(1)
+                            elif "/in/" in href:
+                                slug = re.search(r'/in/([^/?#]+)', href)
+                                if slug:
+                                    profile_url = f"https://www.linkedin.com/in/{slug.group(1)}"
+
+                        if name and profile_url:
+                            if not any(l["profile_url"] == profile_url for l in likers):
+                                likers.append({"name": name, "profile_url": profile_url, "headline": ""})
+                    except Exception:
+                        continue
+
+            # Load more?
             try:
-                load_more = await self.page.query_selector('button.scaffold-finite-scroll__load-button')
-                if load_more:
-                    await load_more.click()
+                load_btn = await self.page.query_selector(
+                    'button.scaffold-finite-scroll__load-button, '
+                    'button[aria-label*="Load more"]'
+                )
+                if load_btn and await load_btn.is_visible():
+                    await load_btn.click()
                     await _human_delay(1.5, 2.5)
                 else:
-                    break
+                    if len(likers) > 0:
+                        break
             except Exception:
                 break
 
         log_success(f"Found {len(likers)} likers on the post")
         return likers
 
-    # ── Get Connections ──────────────────────────────────────────────────────
+    # ── Get Connections ────────────────────────────────────────────────────────────────────────
 
     async def get_connections(self, max_connections: int = 500) -> list[dict]:
         """
-        Scrape the user's 1st-degree LinkedIn connections.
-
-        Args:
-            max_connections: Cap to avoid very long scraping sessions
+        Scrape the user's 1st-degree LinkedIn connections from the connections page.
 
         Returns:
             List of dicts: [{"name": "...", "profile_url": "...", "headline": "..."}]
@@ -423,35 +457,35 @@ class LinkedInBrowser:
         while len(connections) < max_connections:
             offset = page_num * 10
             url = f"https://www.linkedin.com/mynetwork/invite-connect/connections/?start={offset}"
-            await self.page.goto(url, wait_until="domcontentloaded")
+            await self.page.goto(url, wait_until="networkidle", timeout=30_000)
             await _human_delay(2.0, 4.0)
             await _scroll_down(self.page, 3)
 
-            cards = await self.page.query_selector_all(
-                '.mn-connection-card, '
-                '.scaffold-finite-scroll__content li'
-            )
+            # Screenshot first page for debugging
+            if page_num == 0:
+                await self.page.screenshot(path="/tmp/linkedin_connections_page.png")
+                log_step("LINKEDIN BROWSER", f"Connections page URL: {self.page.url[:80]}")
+
+            # Multiple possible card selectors
+            cards = []
+            for card_sel in [
+                '.mn-connection-card',
+                '.scaffold-finite-scroll__content li',
+                '[class*="connection-card"]',
+                '.artdeco-list__item',
+            ]:
+                cards = await self.page.query_selector_all(card_sel)
+                if cards:
+                    log_step("LINKEDIN BROWSER", f"Found {len(cards)} connection cards via: {card_sel}")
+                    break
 
             if not cards:
+                log_warning(f"No connection cards found on page {page_num} — stopping")
                 break
 
             new_found = 0
             for card in cards:
                 try:
-                    name_el = await card.query_selector(
-                        '.mn-connection-card__name, '
-                        'span.t-bold span[aria-hidden="true"]'
-                    )
-                    name = (await name_el.inner_text()).strip() if name_el else ""
-
-                    link_el = await card.query_selector('a[href*="/in/"]')
-                    href = await link_el.get_attribute("href") if link_el else ""
-                    profile_url = ""
-                    if href:
-                        match = re.search(r'(/in/[^/?]+)', href)
-                        if match:
-                            profile_url = "https://www.linkedin.com" + match.group(1)
-
                     headline_el = await card.query_selector(
                         '.mn-connection-card__occupation, '
                         'span.t-14.t-black--light span[aria-hidden="true"]'
