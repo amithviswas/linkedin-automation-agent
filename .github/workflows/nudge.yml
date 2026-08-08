@@ -33,7 +33,7 @@ jobs:
     # PowerShell is the native Windows shell — no bash/WSL dependency
     defaults:
       run:
-        shell: pwsh
+        shell: powershell
 
     steps:
       # ── 1. Checkout ──────────────────────────────────────────────────────────
