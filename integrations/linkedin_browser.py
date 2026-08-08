@@ -390,7 +390,7 @@ class LinkedInBrowser:
         log_step("LINKEDIN BROWSER", f"Loading post: {post_url[:80]}")
 
         clean_url = post_url.split("?")[0].rstrip("/")
-        await self.page.goto(clean_url, wait_until="networkidle", timeout=60_000)
+        await self.page.goto(clean_url, wait_until="domcontentloaded", timeout=60_000)
         await _human_delay(2.5, 4.0)
         await _scroll_down(self.page, 2)
 
@@ -527,7 +527,7 @@ class LinkedInBrowser:
         while len(connections) < max_connections:
             offset = page_num * 10
             url = f"https://www.linkedin.com/mynetwork/invite-connect/connections/?start={offset}"
-            await self.page.goto(url, wait_until="networkidle", timeout=30_000)
+            await self.page.goto(url, wait_until="domcontentloaded", timeout=45_000)
             await _human_delay(2.0, 4.0)
             await _scroll_down(self.page, 3)
 
