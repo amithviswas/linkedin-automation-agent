@@ -19,6 +19,7 @@ import asyncio
 import base64
 import json
 import os
+import tempfile
 import random
 import re
 import time
@@ -179,7 +180,7 @@ class LinkedInBrowser:
             page_text = await self.page.content()
             if "Welcome Back" in page_text or "welcome-back" in current_url.lower():
                 log_step("LINKEDIN BROWSER", "Welcome Back page detected — clicking account to sign in...")
-                await self.page.screenshot(path="/tmp/linkedin_welcome_back.png")
+                await self.page.screenshot(path=os.path.join(tempfile.gettempdir(), "linkedin_welcome_back.png"))
 
                 # Click the first account card (our account)
                 clicked = False
@@ -234,7 +235,7 @@ class LinkedInBrowser:
                 current_url = self.page.url
 
             # ── Final verification ─────────────────────────────────────────────
-            await self.page.screenshot(path="/tmp/linkedin_post_cookie_restore.png")
+            await self.page.screenshot(path=os.path.join(tempfile.gettempdir(), "linkedin_post_cookie_restore.png"))
 
             if any(p in current_url for p in ["feed", "mynetwork", "jobs", "in/"]):
                 log_success(f"Session restored and verified! (URL: {current_url[:60]})")
@@ -286,7 +287,7 @@ class LinkedInBrowser:
 
         if not email_selector:
             # Save screenshot for debugging
-            await self.page.screenshot(path="/tmp/linkedin_login_debug.png")
+            await self.page.screenshot(path=os.path.join(tempfile.gettempdir(), "linkedin_login_debug.png"))
             raise RuntimeError(
                 "Could not find LinkedIn login form after 15s. "
                 "LinkedIn may be showing a CAPTCHA or unusual page. "
@@ -356,7 +357,7 @@ class LinkedInBrowser:
         log_step("LINKEDIN BROWSER", f"Post-login URL: {current_url}")
 
         if "checkpoint" in current_url or "challenge" in current_url:
-            await self.page.screenshot(path="/tmp/linkedin_challenge_debug.png")
+            await self.page.screenshot(path=os.path.join(tempfile.gettempdir(), "linkedin_challenge_debug.png"))
             raise RuntimeError(
                 "LinkedIn triggered a security challenge (2FA or CAPTCHA). "
                 "Please log in manually once to clear it, then re-run."
@@ -394,7 +395,7 @@ class LinkedInBrowser:
         await _scroll_down(self.page, 2)
 
         # Debug screenshot of the post page
-        await self.page.screenshot(path="/tmp/linkedin_post_page.png", full_page=False)
+        await self.page.screenshot(path=os.path.join(tempfile.gettempdir(), "linkedin_post_page.png"), full_page=False)
         log_step("LINKEDIN BROWSER", f"Post page loaded: {self.page.url[:80]}")
 
         likers = []
@@ -427,7 +428,7 @@ class LinkedInBrowser:
 
         if not clicked:
             # Screenshot to see what the page actually looks like
-            await self.page.screenshot(path="/tmp/linkedin_post_no_reactions_btn.png")
+            await self.page.screenshot(path=os.path.join(tempfile.gettempdir(), "linkedin_post_no_reactions_btn.png"))
             log_warning(
                 "Could not find reactions button. "
                 "Screenshot saved: /tmp/linkedin_post_no_reactions_btn.png"
@@ -435,7 +436,7 @@ class LinkedInBrowser:
             return []
 
         # Debug screenshot of the modal
-        await self.page.screenshot(path="/tmp/linkedin_reactions_modal.png")
+        await self.page.screenshot(path=os.path.join(tempfile.gettempdir(), "linkedin_reactions_modal.png"))
 
         # ── Scroll and scrape the reactions modal ──────────────────────────────
         modal_item_selectors = [
@@ -532,7 +533,7 @@ class LinkedInBrowser:
 
             # Screenshot first page for debugging
             if page_num == 0:
-                await self.page.screenshot(path="/tmp/linkedin_connections_page.png")
+                await self.page.screenshot(path=os.path.join(tempfile.gettempdir(), "linkedin_connections_page.png"))
                 log_step("LINKEDIN BROWSER", f"Connections page URL: {self.page.url[:80]}")
 
             # Multiple possible card selectors
