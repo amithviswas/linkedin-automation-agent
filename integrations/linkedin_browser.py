@@ -131,15 +131,18 @@ class LinkedInBrowser:
 
     async def restore_session(self) -> bool:
         """
-        Restore a previously saved LinkedIn session from the LINKEDIN_COOKIES
-        environment variable (GitHub Secret set by save_linkedin_session.py).
+        Restore a previously saved LinkedIn session.
 
-        This bypasses LinkedIn's datacenter IP login block entirely —
-        the cookies were created from a trusted home/work IP and remain valid.
+        Flow:
+          1. Inject saved cookies into the browser context
+          2. Navigate to LinkedIn feed
+          3. If "Welcome Back" / account picker appears — click the account to sign in
+          4. If feed loads → session valid ✅
+          5. If still at login/authwall → session expired, fall back to credential login
 
         Returns:
-            True if session restored and LinkedIn feed is accessible.
-            False if cookies are missing, expired, or invalid.
+            True if fully signed in and feed is accessible.
+            False if cookies are missing, expired, or can't complete sign-in.
         """
         cookies_b64 = os.getenv("LINKEDIN_COOKIES", "")
         if not cookies_b64:
@@ -158,32 +161,98 @@ class LinkedInBrowser:
 
             # Inject cookies into the browser context
             await self._context.add_cookies(cookies)
-            log_step("LINKEDIN BROWSER", f"Injected {len(cookies)} cookies — verifying session...")
+            log_step("LINKEDIN BROWSER", f"Injected {len(cookies)} cookies — navigating to feed...")
 
-            # Navigate to feed to verify the session is still valid
+            # Navigate to feed
             await self.page.goto(
                 "https://www.linkedin.com/feed/",
                 wait_until="domcontentloaded",
                 timeout=30_000,
             )
-            await _human_delay(2.0, 3.5)
+            await _human_delay(2.5, 4.0)
 
             current_url = self.page.url
-            if any(p in current_url for p in ["feed", "mynetwork", "jobs"]):
-                log_success(f"Session restored successfully! (URL: {current_url[:60]})")
+            log_step("LINKEDIN BROWSER", f"Post-cookie URL: {current_url[:80]}")
+
+            # ── Handle "Welcome Back" account picker ──────────────────────────
+            # LinkedIn shows this when it recognises the user but needs a click to log in
+            page_text = await self.page.content()
+            if "Welcome Back" in page_text or "welcome-back" in current_url.lower():
+                log_step("LINKEDIN BROWSER", "Welcome Back page detected — clicking account to sign in...")
+                await self.page.screenshot(path="/tmp/linkedin_welcome_back.png")
+
+                # Click the first account card (our account)
+                clicked = False
+                for sel in [
+                    "button.authentication-outlet__account-btn",
+                    ".reauth-card button",
+                    "[data-test-id='welcome-back-account-btn']",
+                    "li.authentication-outlet__account-item button",
+                    # Generic: click any element containing our email
+                    "div[class*='account'] button:first-child",
+                    "form button[type='submit']",
+                    # Last resort: first clickable button on the page
+                    "main button:first-child",
+                ]:
+                    try:
+                        el = await self.page.query_selector(sel)
+                        if el and await el.is_visible():
+                            await el.click()
+                            clicked = True
+                            log_step("LINKEDIN BROWSER", f"Clicked account via: {sel}")
+                            await _human_delay(2.0, 4.0)
+                            break
+                    except Exception:
+                        continue
+
+                if not clicked:
+                    log_warning("Could not click account on Welcome Back page — needs password re-entry")
+                    return False
+
+                # After clicking, LinkedIn may ask for password (since IP changed)
+                new_url = self.page.url
+                page_text2 = await self.page.content()
+                if "password" in page_text2.lower() or "session_password" in page_text2.lower():
+                    log_step("LINKEDIN BROWSER", "Password required — completing sign-in with stored password...")
+                    password = os.getenv("LINKEDIN_PASSWORD", "")
+                    if not password:
+                        log_warning("LINKEDIN_PASSWORD not set — cannot complete Welcome Back sign-in")
+                        return False
+
+                    # Fill password and submit
+                    for pass_sel in ["#password", "input[name='session_password']", "input[type='password']"]:
+                        try:
+                            await self.page.wait_for_selector(pass_sel, timeout=5_000, state="visible")
+                            await self.page.fill(pass_sel, password)
+                            await _human_delay(0.5, 1.0)
+                            await self.page.keyboard.press("Enter")
+                            await _human_delay(3.0, 5.0)
+                            break
+                        except Exception:
+                            continue
+
+                current_url = self.page.url
+
+            # ── Final verification ─────────────────────────────────────────────
+            await self.page.screenshot(path="/tmp/linkedin_post_cookie_restore.png")
+
+            if any(p in current_url for p in ["feed", "mynetwork", "jobs", "in/"]):
+                log_success(f"Session restored and verified! (URL: {current_url[:60]})")
                 return True
-            elif "login" in current_url or "authwall" in current_url:
-                log_warning("Session expired or invalid — cookies need to be refreshed")
-                log_warning("Run save_linkedin_session.py locally to generate fresh cookies")
+            elif "checkpoint" in current_url or "challenge" in current_url:
+                log_warning("LinkedIn triggered a security checkpoint after cookie restore")
+                return False
+            elif "login" in current_url or "authwall" in current_url or "signup" in current_url:
+                log_warning("Session expired — cookies need refresh. Run save_linkedin_session.py again.")
                 return False
             else:
-                # Some other page — might still be logged in
-                log_success(f"Session appears valid (URL: {current_url[:60]})")
+                log_success(f"Session appears active (URL: {current_url[:60]})")
                 return True
 
         except Exception as e:
             log_warning(f"Session restore failed: {e} — will try credential login")
             return False
+
 
     # ── Credential Login (fallback for local runs) ────────────────────────────
 
